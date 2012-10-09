@@ -1,0 +1,58 @@
+import argparse
+import logging
+from hunter_killer import HunterKiller
+import utils
+
+
+LOG = logging.getLogger(__name__)
+logging.ACTION = 33
+logging.addLevelName(33, 'ACTION')
+LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
+
+
+def main():
+    desc = 'view and modify ports using nvp/melange/nova'
+    parser = argparse.ArgumentParser(description=desc)
+    parser.add_argument('-l', '--loglevel', action='store',
+                        help="set the log level",
+                        default='ACTION')
+    parser.add_argument('-e', '--environment', action='store',
+                        help="Environment to run against")
+    parser.add_argument('-a', '--action', action='store',
+                        help="Action to perform on ports",
+                        default='list')
+    parser.add_argument('-t', '--type', action='store',
+                        help="type of port to deal with: orphaned, no_queue",
+                        default='no_queue')
+    args = parser.parse_args()
+    logging.basicConfig(level=getattr(logging, args.loglevel))
+
+    hk = HunterKiller(**utils.get_connection_creds(args.environment))
+
+    if args.action == 'list':
+        print 'iz in yur controller iteratin yur ports'
+
+    if args.type == 'orphaned':
+        bad_ports = hk.get_orphaned_ports()
+        if args.action == 'list':
+            columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_state',
+                       'instance_terminated_at', 'link_status',
+                       'fabric_status')
+            utils.print_list(bad_ports, columns)
+            print len(bad_ports), 'found.'
+        elif args.action in ('fix', 'fixnoop'):
+            for port in bad_ports:
+                hk.delete_port(port, args.action)
+        return
+    elif args.type == 'no_queue':
+        bad_ports = hk.get_no_queue_ports()
+        columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_flavor',
+                   'queue', 'rxtx_factor', 'rxtx_base', 'lswitch_name')
+        utils.print_list(bad_ports, columns)
+        print len(bad_ports)
+    else:
+        raise Exception('type specefication not supported')
+
+
+if __name__ == "__main__":
+    main()
