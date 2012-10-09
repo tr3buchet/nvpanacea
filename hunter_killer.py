@@ -69,8 +69,6 @@ class HunterKiller(object):
 
         return bad_port_list
 
-##########################################
-
     def get_tag(self, tags, tag_name):
         for tag in tags:
             if tag['scope'] == tag_name:
@@ -132,19 +130,14 @@ class HunterKiller(object):
                  'rxtx_cap': int(port['rxtx_base'] * port['rxtx_factor'])}
 
         LOG.action('creating queue: |%s|', queue)
-        LOG.action('associating port |%s| with queue |%s|',
-                   port['uuid'], queue)
-
         if action == 'fix':
-            # create queue
             queue = self.nvp.create_queue(**queue)
-            print queue
 
-            # assign queue to port
+        LOG.action('associating port |%s| with queue |%s|',
+                   port['uuid'], queue['uuid'])
+        if action == 'fix':
             port = self.nvp.port_update_queue(port, queue['uuid'])
-            print port
 
-    # done
     def get_no_queue_ports(self):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
@@ -182,7 +175,6 @@ class HunterKiller(object):
             port_dict['rxtx_factor'] = instance.get('rxtx_factor', '')
 
             if not queue:
-#            if port_dict['lswitch_name'] not in ('public', 'private'):
                 bad_port_list.append(port_dict)
 
         return bad_port_list
@@ -246,9 +238,6 @@ class NVP(object):
         return IterableQuery(query, limit)
 
     #################### QUEUES ############################################
-
-    def get_queue_by_id(self, id):
-        return self.connection.qos(uuid=id).read()
 
     def get_queues(self, limit=None):
         query = self.connection.qos().query()
