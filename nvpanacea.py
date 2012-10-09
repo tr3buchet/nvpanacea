@@ -47,9 +47,13 @@ def main():
     elif args.type == 'no_queue':
         bad_ports = hk.get_no_queue_ports()
         columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_flavor',
-                   'queue', 'rxtx_factor', 'rxtx_base', 'lswitch_name')
-        utils.print_list(bad_ports, columns)
-        print len(bad_ports)
+                   'rxtx_cap', 'rxtx_factor', 'rxtx_base', 'switch_name')
+        if args.action == 'list':
+            utils.print_list(bad_ports, columns)
+            print len(bad_ports), 'found.'
+        elif args.action in ('fix', 'fixnoop'):
+            for port in bad_ports:
+                hk.repair_port_queue(port, args.action)
     else:
         raise Exception('type specefication not supported')
 

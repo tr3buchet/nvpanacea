@@ -1,5 +1,6 @@
 import aiclib
 import logging
+import re
 import requests
 from requests.auth import HTTPBasicAuth
 from utils import IterableQuery
@@ -7,6 +8,10 @@ from utils import IterableQuery
 
 LOG = logging.getLogger(__name__)
 LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
+
+
+zone_qos_pool_map = {'public': 'pub_base_rate',
+                     'private': 'snet_base_rate'}
 
 
 class HunterKiller(object):
@@ -65,26 +70,79 @@ class HunterKiller(object):
         return bad_port_list
 
 ##########################################
-    def _repair_switch_qos_pool(self, switch):
-        LOG.action('repairing switch |%s| qos_pool', switch['uuid'])
-#        tags = switch['tags']
-#        qos_pool = {'scope': 'qos_pool',
-#                    'tag': qos_pool_id}
-        zone_id = switch['transport_zones'][0]['zone_uuid']
+
+    def get_tag(self, tags, tag_name):
+        for tag in tags:
+            if tag['scope'] == tag_name:
+                return tag['tag']
+        return None
+
+    def is_tenant_switch(self, switch_tags):
+        os_tid = self.get_tag(switch_tags, 'os_tid')
+        return not re.search('-c[0-9]{4}$', os_tid)
+
+    def get_qos_pool_from_switch_tags(self, tags):
+        qos_pool_id = self.get_tag(tags, 'qos_pool')
+        if qos_pool_id:
+            return self.nvp.get_qos_pool_by_id(qos_pool_id)
+        return None
+
+    def get_qos_pool_from_transport_zone_map(self, zone_id):
         zone = self.nvp.get_transport_zone_by_id(zone_id)
         zone_name = zone['display_name']
-        print zone
+        qos_pool_name = zone_qos_pool_map[zone_name]
+        return self.nvp.get_qos_pool_by_name(qos_pool_name)
 
-    def _get_switch_qos_pool(self, switch):
-        tags = switch['tags']
-        for tag in tags:
-            if tag['scope'] == 'qos_pool':
-                qos_pool_id = tag['tag']
-                return self.nvp.get_qos_pool_by_id(qos_pool_id)
-        LOG.error('switch |%s| |%s| does not have a qos pool!' \
-                % (switch['uuid'], switch['display_name']))
-        self._repair_switch_qos_pool(switch)
-        return None
+    def get_qos_pool(self, port):
+        qos_pool = self.get_qos_pool_from_switch_tags(port['switch']['tags'])
+        if qos_pool:
+            return qos_pool
+
+        msg = 'port |%s| switch |%s||%s| does not have a qos pool!'
+        LOG.error(msg, port['uuid'], port['switch']['uuid'],
+                  port['switch']['name'])
+
+        # lswitch didn't have a qos_pool, have to use transport zone
+        zone_id = port['switch']['transport_zone_uuid']
+        qos_pool = self.get_qos_pool_from_transport_zone_map(zone_id)
+        if qos_pool:
+            return qos_pool
+
+        msg = "qos pool couldn't be found using transport zone map either!"
+        LOG.error(msg, port['uuid'], port['switch']['uuid'],
+                  port['switch']['name'])
+
+    def repair_port_queue(self, port, action):
+        LOG.action('fix queue for port |%s|', port['uuid'])
+        if port['rxtx_cap']:
+            LOG.warn('port |%s| already has a queue!', port['uuid'])
+            return
+
+        if self.is_tenant_switch(port['switch']['tags']):
+            msg = 'port |%s| is a tenant network port, skipping for now'
+            LOG.warn(msg, port['uuid'])
+            return
+
+        if not port['rxtx_base']:
+            msg = "port |%s| can't fix queue with no switch qos_pool"
+            LOG.error(msg, port['uuid'])
+
+        queue = {'display_name': port['qos_pool']['uuid'],
+                 'vmid': port['instance_id'],
+                 'rxtx_cap': int(port['rxtx_base'] * port['rxtx_factor'])}
+
+        LOG.action('creating queue: |%s|', queue)
+        LOG.action('associating port |%s| with queue |%s|',
+                   port['uuid'], queue)
+
+        if action == 'fix':
+            # create queue
+            queue = self.nvp.create_queue(**queue)
+            print queue
+
+            # assign queue to port
+            port = self.nvp.port_update_queue(port, queue['uuid'])
+            print port
 
     # done
     def get_no_queue_ports(self):
@@ -100,18 +158,21 @@ class HunterKiller(object):
             attachment = port['_relations']['LogicalPortAttachment']
             switch = port['_relations']['LogicalSwitchConfig']
 
-            # get roxtx_base from qos pool
-            qos_pool = self._get_switch_qos_pool(switch)
-            print qos_pool
-            rxtx_base = qos_pool['max_bandwidth_rate'] if qos_pool else ''
+            switch_dict = {'uuid': status['lswitch']['uuid'],
+                           'name': switch['display_name'],
+                           'tags': switch['tags'],
+                           'transport_zone_uuid': \
+                                   switch['transport_zones'][0]['zone_uuid']}
 
             port_dict = {'uuid': port.get('uuid', ''),
-                         'lswitch_uuid': status['lswitch']['uuid'],
-                         'lswitch_name': switch['display_name'],
-                         'lswitch_tags': switch['tags'],
+                         'switch': switch_dict,
+                         'switch_name': switch['display_name'],
                          'vif_uuid': attachment.get('vif_uuid', ''),
-                         'queue': queue.get('max_bandwidth_rate', ''),
-                         'rxtx_base': rxtx_base}
+                         'rxtx_cap': queue.get('max_bandwidth_rate', '')}
+
+            qp = self.get_qos_pool(port_dict)
+            port_dict['qos_pool'] = qp
+            port_dict['rxtx_base'] = qp['max_bandwidth_rate'] if qp else ''
 
             # get the instance and its flavor rxtx_factor
             get_instance = self.get_instance_by_port
@@ -120,8 +181,8 @@ class HunterKiller(object):
             port_dict['instance_flavor'] = instance.get('instance_type_id', '')
             port_dict['rxtx_factor'] = instance.get('rxtx_factor', '')
 
-#            if not port_dict['queue'] or True:
-            if port_dict['lswitch_name'] not in ('public', 'private'):
+            if not queue:
+#            if port_dict['lswitch_name'] not in ('public', 'private'):
                 bad_port_list.append(port_dict)
 
         return bad_port_list
@@ -137,7 +198,10 @@ class NVP(object):
     def __init__(self, url, username, password):
         self.connection = aiclib.nvp.Connection(url, username=username,
                                                      password=password)
-        self.qos_pools = {}
+
+        # small memory cache to prevent multiple lookups
+        self.qos_pools_by_id = {}
+        self.qos_pools_by_name = {}
         self.transport_zones = {}
 
     @classmethod
@@ -146,10 +210,11 @@ class NVP(object):
             if relation not in cls.ALL_RELATIONS:
                 raise Exception('Bad relation requested: %s' % relation)
 
+    #################### PORTS ################################################
+
     def delete_port(self, port):
-        query = self.connection.lswitch_port(port['lswitch_uuid'],
-                                             port['uuid']).delete()
-        return query
+        self.connection.lswitch_port(port['lswitch_uuid'],
+                                     port['uuid']).delete()
 
     def get_ports(self, relations=None, limit=None):
         query = self.connection.lswitch_port('*').query()
@@ -165,6 +230,14 @@ class NVP(object):
 
         return IterableQuery(query, limit)
 
+    def port_update_queue(self, port, queue_id):
+        port = self.connection.lswitch_port(port['switch']['uuid'],
+                                            port['uuid'])
+        port.qosuuid(queue_id)
+        return port.update()
+
+    #################### SWITCHES #############################################
+
     def get_switch_by_id(self, id):
         return self.connection.lswitch(uuid=id).read()
 
@@ -172,27 +245,53 @@ class NVP(object):
         query = self.connection.lswitch().query()
         return IterableQuery(query, limit)
 
-    def get_qos_pool_by_id(self, id):
-        # a qos pool is actually a queue but these 2 are special
-        if self.qos_pools.get(id):
-            return self.qos_pools[id]
-        LOG.info('calling for qos pool')
-        pool = self.connection.qos(uuid=id).read()
-        self.qos_pools[id] = pool
-        return pool
+    #################### QUEUES ############################################
 
     def get_queue_by_id(self, id):
-        LOG.info('calling for queue |%s|', id)
         return self.connection.qos(uuid=id).read()
 
     def get_queues(self, limit=None):
         query = self.connection.qos().query()
         return IterableQuery(query, limit)
 
+    def create_queue(self, display_name, vmid, rxtx_cap):
+        queue = self.connection.qos()
+        queue.display_name(display_name)
+        queue.tags({'scope': 'vmid',
+                    'tag': vmid})
+        queue.maxbw_rate(rxtx_cap)
+        return queue.create()
+
+    def delete_queue(self, id):
+        self.connection.qos(id).delete()
+
+    #################### QOS POOLS ############################################
+    # a qos pool is actually a queue but these 2 are special
+
+    def get_qos_pool_by_id(self, id):
+        if self.qos_pools_by_id.get(id):
+            return self.qos_pools_by_id[id]
+        pool = self.connection.qos(uuid=id).read()
+        self.qos_pools_by_id[id] = pool
+        return pool
+
+    def get_qos_pool_by_name(self, name):
+        if self.qos_pools_by_name.get(name):
+            return self.qos_pools_by_name[name]
+        results = self.connection.qos().query().display_name(name).results()
+        try:
+            pool = results['results'][0]
+        except (IndexError, KeyError):
+            return None
+
+        self.qos_pools_by_name[name] = pool
+        return pool
+
+    #################### TRANSPORT ZONES ######################################
+
     def get_transport_zone_by_id(self, id):
         if self.transport_zones.get(id):
             return self.transport_zones[id]
-        LOG.info('calling for transport zone |%s|', id)
         zone = self.connection.zone(uuid=id).read()
         self.transport_zones[id] = zone
         return zone
@@ -219,7 +318,6 @@ class Melange(MysqlJsonBridgeEndpoint):
         self.session = requests.session()
 
     def get_interface_by_id(self, id):
-        LOG.info('get melange interface |%s|', id)
         result = self.run_query('select * from interfaces where id="%s"' % id)
         return self.first_result(result)
 
@@ -231,7 +329,6 @@ class Nova(MysqlJsonBridgeEndpoint):
         self.session = requests.session()
 
     def get_instance_by_id(self, id, join_flavor=False):
-        LOG.info('get nova instance |%s|', id)
         if join_flavor:
             sql = ('select * from instances left join instance_types '
                    'on instances.instance_type_id=instance_types.id '
