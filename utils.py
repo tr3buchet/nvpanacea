@@ -17,7 +17,7 @@ def print_list(items, columns):
     print t
 
 
-def get_config_from_file(self):
+def get_config_from_file():
         possible_configs = [os.path.expanduser("~/.nvpanacea"),
                             '.nvpanacea']
         config = ConfigParser.RawConfigParser()
@@ -36,7 +36,7 @@ def check_keyring(value):
 
 
 def get_connection_creds(environment):
-    config = get_config_from_file(environment)
+    config = get_config_from_file()
     msg = ('%s creds not specified. Make sure to set USE_KEYRING specified '
            'values with supernova keyring if you intend to use them')
 

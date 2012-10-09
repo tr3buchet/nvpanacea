@@ -10,19 +10,37 @@ logging.addLevelName(33, 'ACTION')
 LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 
+# Note(tr3buchet): this is necessary to prevent argparse from requiring the
+#                  the 'env' parameter when using -l or --list
+class _ListAction(argparse._HelpAction):
+    """ListAction used for the -l and --list arguments."""
+    def __call__(self, parser, *args, **kwargs):
+        """Lists are configured supernova environments."""
+        config = utils.get_config_from_file()
+        for section in config.sections():
+            envheader = '-- %s ' % section
+            print envheader.ljust(86, '-')
+            for param, value in sorted(config.items(section)):
+                print '  %s: %s' % (param.upper().ljust(21), value)
+        parser.exit()
+
+
 def main():
     desc = 'view and modify ports using nvp/melange/nova'
     parser = argparse.ArgumentParser(description=desc)
-    parser.add_argument('-l', '--loglevel', action='store',
-                        help="set the log level",
+    parser.add_argument('-l', '--list', action=_ListAction,
+                       dest='listenvs',
+                       help='list all configured environments')
+    parser.add_argument('--loglevel', action='store',
+            help="set log level: DEBUG, INFO, WARN, ACTION, ERROR..",
                         default='ACTION')
     parser.add_argument('-e', '--environment', action='store',
-                        help="Environment to run against")
+                        help="Environment to run against, for options use -l")
     parser.add_argument('-a', '--action', action='store',
-                        help="Action to perform on ports",
+                        help="list, fix, or fixnoop",
                         default='list')
     parser.add_argument('-t', '--type', action='store',
-                        help="type of port to deal with: orphaned, no_queue",
+                        help="orphaned or no_queue",
                         default='no_queue')
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel))
