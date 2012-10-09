@@ -74,7 +74,8 @@ def get_connection_creds(environment):
 
 class IterableQuery(object):
     """Iterates over query object multiple batches, supports limit"""
-    def __init__(self, query, limit=None):
+    def __init__(self, nvp, query, limit=None):
+        self.nvp = nvp
         self.query = query
         self.first = True
         self.limit = limit or 0
@@ -88,13 +89,19 @@ class IterableQuery(object):
                     raise StopIteration()
                 counter += 1
                 yield item
+            if counter == self.limit:
+                # if we're at the limit don't don't get next batch
+                raise StopIteration()
             batch = self.get_next_batch()
 
     def get_next_batch(self):
         try:
+            self.nvp.calls += 1
             if self.first:
                 self.first = False
                 return self.query.results()['results']
             return self.query.next()['results']
         except TypeError:
+            LOG.critical('stop')
+            self.nvp.calls -= 1
             raise StopIteration()

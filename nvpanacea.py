@@ -52,12 +52,14 @@ def main():
 
     if args.type == 'orphaned':
         bad_ports = hk.get_orphaned_ports()
+        LOG.critical('thing')
         if args.action == 'list':
             columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_state',
                        'instance_terminated_at', 'link_status',
                        'fabric_status')
             utils.print_list(bad_ports, columns)
             print len(bad_ports), 'found.'
+            print hk.calls_made()
         elif args.action in ('fix', 'fixnoop'):
             for port in bad_ports:
                 hk.delete_port(port, args.action)
@@ -69,6 +71,7 @@ def main():
         if args.action == 'list':
             utils.print_list(bad_ports, columns)
             print len(bad_ports), 'found.'
+            print hk.calls_made()
         elif args.action in ('fix', 'fixnoop'):
             for port in bad_ports:
                 hk.repair_port_queue(port, args.action)

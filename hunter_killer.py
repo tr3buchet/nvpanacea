@@ -12,6 +12,7 @@ LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
+limit = 100
 
 
 class HunterKiller(object):
@@ -36,7 +37,7 @@ class HunterKiller(object):
 
     def get_orphaned_ports(self):
         relations = ('LogicalPortStatus', 'LogicalPortAttachment')
-        ports = self.nvp.get_ports(relations, limit=20)
+        ports = self.nvp.get_ports(relations, limit=limit)
 
         bad_port_list = []
         for port in ports:
@@ -141,7 +142,7 @@ class HunterKiller(object):
     def get_no_queue_ports(self):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        ports = self.nvp.get_ports(relations, limit=10)
+        ports = self.nvp.get_ports(relations, limit=limit)
 
         bad_port_list = []
         for port in ports:
@@ -179,6 +180,10 @@ class HunterKiller(object):
 
         return bad_port_list
 
+    def calls_made(self):
+        msg = '%s calls to nvp\n%s calls to melange\n%s calls to nova'
+        return msg % (self.nvp.calls, self.melange.calls, self.nova.calls)
+
 
 class NVP(object):
     ALL_RELATIONS = ['LogicalPortStatus', 'LogicalPortAttachment',
@@ -190,6 +195,7 @@ class NVP(object):
     def __init__(self, url, username, password):
         self.connection = aiclib.nvp.Connection(url, username=username,
                                                      password=password)
+        self.calls = 0
 
         # small memory cache to prevent multiple lookups
         self.qos_pools_by_id = {}
@@ -205,6 +211,7 @@ class NVP(object):
     #################### PORTS ################################################
 
     def delete_port(self, port):
+        self.calls += 1
         self.connection.lswitch_port(port['lswitch_uuid'],
                                      port['uuid']).delete()
 
@@ -220,9 +227,10 @@ class NVP(object):
             self._check_relations(relations)
             query = query.relations(relations)
 
-        return IterableQuery(query, limit)
+        return IterableQuery(self, query, limit)
 
     def port_update_queue(self, port, queue_id):
+        self.calls += 1
         port = self.connection.lswitch_port(port['switch']['uuid'],
                                             port['uuid'])
         port.qosuuid(queue_id)
@@ -231,19 +239,21 @@ class NVP(object):
     #################### SWITCHES #############################################
 
     def get_switch_by_id(self, id):
+        self.calls += 1
         return self.connection.lswitch(uuid=id).read()
 
     def get_switches(self, limit=None):
         query = self.connection.lswitch().query()
-        return IterableQuery(query, limit)
+        return IterableQuery(self, query, limit)
 
     #################### QUEUES ############################################
 
     def get_queues(self, limit=None):
         query = self.connection.qos().query()
-        return IterableQuery(query, limit)
+        return IterableQuery(self, query, limit)
 
     def create_queue(self, display_name, vmid, rxtx_cap):
+        self.calls += 1
         queue = self.connection.qos()
         queue.display_name(display_name)
         queue.tags({'scope': 'vmid',
@@ -252,6 +262,7 @@ class NVP(object):
         return queue.create()
 
     def delete_queue(self, id):
+        self.calls += 1
         self.connection.qos(id).delete()
 
     #################### QOS POOLS ############################################
@@ -260,6 +271,7 @@ class NVP(object):
     def get_qos_pool_by_id(self, id):
         if self.qos_pools_by_id.get(id):
             return self.qos_pools_by_id[id]
+        self.calls += 1
         pool = self.connection.qos(uuid=id).read()
         self.qos_pools_by_id[id] = pool
         return pool
@@ -267,6 +279,7 @@ class NVP(object):
     def get_qos_pool_by_name(self, name):
         if self.qos_pools_by_name.get(name):
             return self.qos_pools_by_name[name]
+        self.calls += 1
         results = self.connection.qos().query().display_name(name).results()
         try:
             pool = results['results'][0]
@@ -281,6 +294,7 @@ class NVP(object):
     def get_transport_zone_by_id(self, id):
         if self.transport_zones.get(id):
             return self.transport_zones[id]
+        self.calls += 1
         zone = self.connection.zone(uuid=id).read()
         self.transport_zones[id] = zone
         return zone
@@ -291,6 +305,7 @@ class MysqlJsonBridgeEndpoint(object):
         payload = {'sql': sql}
         r = self.session.post(self.url, data=payload,
                               verify=False, auth=self.auth)
+        self.calls += 1
         return r.json
 
     def first_result(self, result):
@@ -305,6 +320,7 @@ class Melange(MysqlJsonBridgeEndpoint):
         self.url = url
         self.auth = HTTPBasicAuth(username, password)
         self.session = requests.session()
+        self.calls = 0
 
     def get_interface_by_id(self, id):
         result = self.run_query('select * from interfaces where id="%s"' % id)
@@ -316,13 +332,16 @@ class Nova(MysqlJsonBridgeEndpoint):
         self.url = url
         self.auth = HTTPBasicAuth(username, password)
         self.session = requests.session()
+        self.calls = 0
 
     def get_instance_by_id(self, id, join_flavor=False):
+        select_list = ['uuid', 'vm_state', 'terminated_at']
         if join_flavor:
-            sql = ('select * from instances left join instance_types '
+            select_list.extend(['instance_type_id', 'rxtx_factor'])
+            sql = ('select %s from instances left join instance_types '
                    'on instances.instance_type_id=instance_types.id '
                    'where uuid="%s"')
         else:
-            sql = 'select * from instances where uuid="%s"'
-        result = self.run_query(sql % id)
+            sql = 'select %s from instances where uuid="%s"'
+        result = self.run_query(sql % (','.join(select_list), id))
         return self.first_result(result)
