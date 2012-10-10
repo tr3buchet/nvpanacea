@@ -78,7 +78,7 @@ class IterableQuery(object):
         self.nvp = nvp
         self.query = query
         self.first = True
-        self.limit = limit or 0
+        self.limit = limit or 9999999
 
     def __iter__(self):
         counter = 0

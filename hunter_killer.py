@@ -12,7 +12,6 @@ LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
-limit = 100
 
 
 class HunterKiller(object):
@@ -33,7 +32,10 @@ class HunterKiller(object):
     def delete_port(self, port, action):
         LOG.action('delete port |%s|', port['uuid'])
         if action == 'fix':
-            return self.nvp.delete_port(port)
+            try:
+                return self.nvp.delete_port(port)
+            except aiclib.nvp.ResourceNotFound:
+                pass
 
 #    def get_group_from_iter(self, iterable, number):
 #        args = [iter(iterable)] * number
@@ -41,7 +43,7 @@ class HunterKiller(object):
 
     def get_orphaned_ports(self):
         relations = ('LogicalPortStatus', 'LogicalPortAttachment')
-        ports = self.nvp.get_ports(relations, limit=limit)
+        ports = self.nvp.get_ports(relations)
 
         bad_port_list = []
 #        for port_group in izip_longest(*([iter(ports)] * 10)):
@@ -132,8 +134,13 @@ class HunterKiller(object):
             LOG.error(msg, port['uuid'])
 
         queue = {'display_name': port['qos_pool']['uuid'],
-                 'vmid': port['instance_id'],
-                 'rxtx_cap': int(port['rxtx_base'] * port['rxtx_factor'])}
+                 'vmid': port['instance_id']}
+        try:
+            queue['rxtx_cap'] = int(port['rxtx_base'] * port['rxtx_factor'])
+        except ValueError:
+            LOG.error('rxtx_cap calculation failed. base: |%s|, factor: |%s|',
+                      port['rxtx_base'], port['rxtx_factor'])
+            return
 
         LOG.action('creating queue: |%s|', queue)
         if action == 'fix':
@@ -142,12 +149,16 @@ class HunterKiller(object):
         LOG.action('associating port |%s| with queue |%s|',
                    port['uuid'], queue['uuid'])
         if action == 'fix':
-            port = self.nvp.port_update_queue(port, queue['uuid'])
+            try:
+                port = self.nvp.port_update_queue(port, queue['uuid'])
+            except aiclib.nvp.ResourceNotFound:
+                # TODO: delete the queue we just made
+                pass
 
     def get_no_queue_ports(self):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        ports = self.nvp.get_ports(relations, limit=limit)
+        ports = self.nvp.get_ports(relations)
 
         bad_port_list = []
         for port in ports:
