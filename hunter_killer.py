@@ -12,7 +12,7 @@ LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
-limit = 100
+limit = None
 
 
 class HunterKiller(object):
@@ -35,11 +35,16 @@ class HunterKiller(object):
         if action == 'fix':
             return self.nvp.delete_port(port)
 
+#    def get_group_from_iter(self, iterable, number):
+#        args = [iter(iterable)] * number
+#        return izip_longest(*args)
+
     def get_orphaned_ports(self):
         relations = ('LogicalPortStatus', 'LogicalPortAttachment')
         ports = self.nvp.get_ports(relations, limit=limit)
 
         bad_port_list = []
+#        for port_group in izip_longest(*([iter(ports)] * 10)):
         for port in ports:
             status = port['_relations']['LogicalPortStatus']
             attachment = port['_relations']['LogicalPortAttachment']
@@ -323,7 +328,8 @@ class Melange(MysqlJsonBridgeEndpoint):
         self.calls = 0
 
     def get_interface_by_id(self, id):
-        result = self.run_query('select * from interfaces where id="%s"' % id)
+        sql = 'select device_id from interfaces where id="%s"'
+        result = self.run_query(sql % id)
         return self.first_result(result)
 
 

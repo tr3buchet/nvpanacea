@@ -40,7 +40,7 @@ def main():
                         help="list, fix, or fixnoop",
                         default='list')
     parser.add_argument('-t', '--type', action='store',
-                        help="orphaned or no_queue",
+                        help="orphan or no_queue",
                         default='no_queue')
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel))
@@ -50,7 +50,7 @@ def main():
     if args.action == 'list':
         print 'iz in yur controller iteratin yur ports'
 
-    if args.type == 'orphaned':
+    if args.type == 'orphan':
         bad_ports = hk.get_orphaned_ports()
         LOG.critical('thing')
         if args.action == 'list':
