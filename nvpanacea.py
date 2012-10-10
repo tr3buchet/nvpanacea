@@ -52,7 +52,6 @@ def main():
 
     if args.type == 'orphan':
         bad_ports = hk.get_orphaned_ports()
-        LOG.critical('thing')
         if args.action == 'list':
             columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_state',
                        'instance_terminated_at', 'link_status',

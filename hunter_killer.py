@@ -12,7 +12,7 @@ LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
-limit = None
+limit = 100
 
 
 class HunterKiller(object):
@@ -316,7 +316,7 @@ class MysqlJsonBridgeEndpoint(object):
     def first_result(self, result):
         try:
             return result['result'][0]
-        except (IndexError, KeyError):
+        except (TypeError, IndexError, KeyError):
             return None
 
 

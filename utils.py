@@ -102,6 +102,5 @@ class IterableQuery(object):
                 return self.query.results()['results']
             return self.query.next()['results']
         except TypeError:
-            LOG.critical('stop')
             self.nvp.calls -= 1
             raise StopIteration()
