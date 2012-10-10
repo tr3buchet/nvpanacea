@@ -43,7 +43,7 @@ class HunterKiller(object):
 
     def get_orphaned_ports(self):
         relations = ('LogicalPortStatus', 'LogicalPortAttachment')
-        ports = self.nvp.get_ports(relations)
+        ports = self.nvp.get_ports(relations, limit=100)
 
         bad_port_list = []
 #        for port_group in izip_longest(*([iter(ports)] * 10)):
@@ -77,18 +77,18 @@ class HunterKiller(object):
 
         return bad_port_list
 
-    def get_tag(self, tags, tag_name):
-        for tag in tags:
-            if tag['scope'] == tag_name:
-                return tag['tag']
-        return None
+    def get_tag(self, obj, tag_name):
+        if 'tags' in obj:
+            for tag in obj['tags']:
+                if tag['scope'] == tag_name:
+                    return tag['tag']
 
-    def is_tenant_switch(self, switch_tags):
-        os_tid = self.get_tag(switch_tags, 'os_tid')
+    def is_tenant_switch(self, switch):
+        os_tid = self.get_tag(switch, 'os_tid')
         return not re.search('-c[0-9]{4}$', os_tid)
 
-    def get_qos_pool_from_switch_tags(self, tags):
-        qos_pool_id = self.get_tag(tags, 'qos_pool')
+    def get_qos_pool_from_switch(self, switch):
+        qos_pool_id = self.get_tag(switch, 'qos_pool')
         if qos_pool_id:
             return self.nvp.get_qos_pool_by_id(qos_pool_id)
         return None
@@ -100,7 +100,7 @@ class HunterKiller(object):
         return self.nvp.get_qos_pool_by_name(qos_pool_name)
 
     def get_qos_pool(self, port):
-        qos_pool = self.get_qos_pool_from_switch_tags(port['switch']['tags'])
+        qos_pool = self.get_qos_pool_from_switch(port['switch'])
         if qos_pool:
             return qos_pool
 
@@ -124,7 +124,7 @@ class HunterKiller(object):
             LOG.warn('port |%s| already has a queue!', port['uuid'])
             return
 
-        if self.is_tenant_switch(port['switch']['tags']):
+        if self.is_tenant_switch(port['switch']):
             msg = 'port |%s| is a tenant network port, skipping for now'
             LOG.warn(msg, port['uuid'])
             return
@@ -145,10 +145,8 @@ class HunterKiller(object):
         LOG.action('creating queue: |%s|', queue)
         if action == 'fix':
             queue = self.nvp.create_queue(**queue)
-
-        LOG.action('associating port |%s| with queue |%s|',
-                   port['uuid'], queue['uuid'])
-        if action == 'fix':
+            LOG.action('associating port |%s| with queue |%s|',
+                       port['uuid'], queue['uuid'])
             try:
                 port = self.nvp.port_update_queue(port, queue['uuid'])
             except aiclib.nvp.ResourceNotFound:
@@ -158,7 +156,7 @@ class HunterKiller(object):
     def get_no_queue_ports(self):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        ports = self.nvp.get_ports(relations)
+        ports = self.nvp.get_ports(relations, limit=100)
 
         bad_port_list = []
         for port in ports:
