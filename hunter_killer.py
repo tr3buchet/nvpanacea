@@ -23,11 +23,20 @@ class HunterKiller(object):
         self.melange = Melange(melange_url, melange_username, melange_password)
 
     def get_instance_by_port(self, port, join_flavor=False):
-        interface = self.melange.get_interface_by_id(port['vif_uuid']) \
-                    if port['vif_uuid'] else None
-        return self.nova.get_instance_by_id(interface['device_id'],
-                                            join_flavor) \
-               if interface and interface['device_id'] else None
+        instance_id = port['instance_id']
+
+        # get instance_id from melange if we don't already have it
+        if not instance_id:
+            interface = self.melange.get_interface_by_id(port['vif_uuid']) \
+                        if port['vif_uuid'] else None
+            # if we got an interface back, grab it's device_id
+            if interface:
+                instance_id = interface['device_id']
+
+        # if we ended up with an instance_id, attempt to get instance
+        if instance_id:
+            return self.nova.get_instance_by_id(instance_id,
+                                                join_flavor)
 
     def delete_port(self, port, action):
         LOG.action('delete port |%s|', port['uuid'])
@@ -42,12 +51,15 @@ class HunterKiller(object):
 #        return izip_longest(*args)
 
     def get_orphaned_ports(self):
-        relations = ('LogicalPortStatus', 'LogicalPortAttachment')
-        ports = self.nvp.get_ports(relations, limit=100)
+        relations = ('LogicalPortStatus', 'LogicalPortAttachment',
+                     'LogicalQueueConfig')
+        ports = self.nvp.get_ports(relations)
 
         bad_port_list = []
 #        for port_group in izip_longest(*([iter(ports)] * 10)):
         for port in ports:
+            # pull out relations for easy access
+            queue = port['_relations']['LogicalQueueConfig']
             status = port['_relations']['LogicalPortStatus']
             attachment = port['_relations']['LogicalPortAttachment']
             lstatus = 'up' if status['link_status_up'] else 'down'
@@ -56,7 +68,8 @@ class HunterKiller(object):
                          'lswitch_uuid': status['lswitch']['uuid'],
                          'vif_uuid': attachment.get('vif_uuid', ''),
                          'link_status': lstatus,
-                         'fabric_status': fstatus}
+                         'fabric_status': fstatus,
+                         'instance_id': self.get_tag(queue, 'vmid') or ''}
 
             # get the instance
             instance = self.get_instance_by_port(port_dict)
@@ -91,7 +104,6 @@ class HunterKiller(object):
         qos_pool_id = self.get_tag(switch, 'qos_pool')
         if qos_pool_id:
             return self.nvp.get_qos_pool_by_id(qos_pool_id)
-        return None
 
     def get_qos_pool_from_transport_zone_map(self, zone_id):
         zone = self.nvp.get_transport_zone_by_id(zone_id)
@@ -124,6 +136,7 @@ class HunterKiller(object):
             LOG.warn('port |%s| already has a queue!', port['uuid'])
             return
 
+        # TODO handle tenant switch ports
         if self.is_tenant_switch(port['switch']):
             msg = 'port |%s| is a tenant network port, skipping for now'
             LOG.warn(msg, port['uuid'])
@@ -156,7 +169,7 @@ class HunterKiller(object):
     def get_no_queue_ports(self):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        ports = self.nvp.get_ports(relations, limit=100)
+        ports = self.nvp.get_ports(relations)
 
         bad_port_list = []
         for port in ports:
@@ -166,30 +179,36 @@ class HunterKiller(object):
             attachment = port['_relations']['LogicalPortAttachment']
             switch = port['_relations']['LogicalSwitchConfig']
 
-            switch_dict = {'uuid': status['lswitch']['uuid'],
-                           'name': switch['display_name'],
-                           'tags': switch['tags'],
-                           'transport_zone_uuid': \
-                                   switch['transport_zones'][0]['zone_uuid']}
-
-            port_dict = {'uuid': port.get('uuid', ''),
-                         'switch': switch_dict,
-                         'switch_name': switch['display_name'],
-                         'vif_uuid': attachment.get('vif_uuid', ''),
-                         'rxtx_cap': queue.get('max_bandwidth_rate', '')}
-
-            qp = self.get_qos_pool(port_dict)
-            port_dict['qos_pool'] = qp
-            port_dict['rxtx_base'] = qp['max_bandwidth_rate'] if qp else ''
-
-            # get the instance and its flavor rxtx_factor
-            get_instance = self.get_instance_by_port
-            instance = get_instance(port_dict, join_flavor=True) or {}
-            port_dict['instance_id'] = instance.get('uuid', '')
-            port_dict['instance_flavor'] = instance.get('instance_type_id', '')
-            port_dict['rxtx_factor'] = instance.get('rxtx_factor', '')
-
             if not queue:
+                switch_dict = {'uuid': status['lswitch']['uuid'],
+                               'name': switch['display_name'],
+                               'tags': switch['tags'],
+                               'transport_zone_uuid': \
+                                     switch['transport_zones'][0]['zone_uuid']}
+
+                # ignore tenant switch ports for now
+                if self.is_tenant_switch(switch_dict):
+                    continue
+
+                port_dict = {'uuid': port.get('uuid', ''),
+                             'switch': switch_dict,
+                             'switch_name': switch['display_name'],
+                             'vif_uuid': attachment.get('vif_uuid', ''),
+                             'rxtx_cap': queue.get('max_bandwidth_rate', ''),
+                             'instance_id': self.get_tag(queue, 'vmid') or ''}
+
+                qp = self.get_qos_pool(port_dict)
+                port_dict['qos_pool'] = qp
+                port_dict['rxtx_base'] = qp['max_bandwidth_rate'] if qp else ''
+
+                # get the instance and its flavor rxtx_factor
+                get_instance = self.get_instance_by_port
+                instance = get_instance(port_dict, join_flavor=True) or {}
+                port_dict['instance_id'] = instance.get('uuid', '')
+                port_dict['instance_flavor'] = \
+                                      instance.get('instance_type_id', '')
+                port_dict['rxtx_factor'] = instance.get('rxtx_factor', '')
+
                 bad_port_list.append(port_dict)
 
         return bad_port_list
