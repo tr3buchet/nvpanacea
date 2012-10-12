@@ -47,8 +47,7 @@ def main():
 
     hk = HunterKiller(**utils.get_connection_creds(args.environment))
 
-    if args.action == 'list':
-        print 'iz in yur controller iteratin yur ports'
+    print 'iz in yur controller iteratin yur ports'
 
     if args.type == 'orphan':
         bad_ports = hk.get_orphaned_ports()
@@ -57,11 +56,13 @@ def main():
                        'instance_terminated_at', 'link_status',
                        'fabric_status')
             utils.print_list(bad_ports, columns)
-            print len(bad_ports), 'found.'
+            print len(bad_ports), 'orphaned ports found'
             print hk.calls_made()
         elif args.action in ('fix', 'fixnoop'):
             for port in bad_ports:
                 hk.delete_port(port, args.action)
+            print len(bad_ports), 'orphaned ports deleted'
+            print hk.calls_made()
         return
     elif args.type == 'no_queue':
         bad_ports = hk.get_no_queue_ports()
@@ -69,11 +70,13 @@ def main():
                    'rxtx_cap', 'rxtx_factor', 'rxtx_base', 'switch_name')
         if args.action == 'list':
             utils.print_list(bad_ports, columns)
-            print len(bad_ports), 'found.'
+            print len(bad_ports), 'queueless ports found'
             print hk.calls_made()
         elif args.action in ('fix', 'fixnoop'):
             for port in bad_ports:
                 hk.repair_port_queue(port, args.action)
+            print len(bad_ports), 'queueless ports fixed'
+            print hk.calls_made()
     else:
         raise Exception('type specefication not supported')
 
