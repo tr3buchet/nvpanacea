@@ -1,3 +1,4 @@
+import aiclib
 import ConfigParser
 import keyring
 import logging
@@ -101,6 +102,6 @@ class IterableQuery(object):
                 self.first = False
                 return self.query.results()['results']
             return self.query.next()['results']
-        except TypeError:
+        except (TypeError, aiclib.nvp.NVPException):
             self.nvp.calls -= 1
             raise StopIteration()

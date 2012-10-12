@@ -178,8 +178,11 @@ class HunterKiller(object):
             status = port['_relations']['LogicalPortStatus']
             attachment = port['_relations']['LogicalPortAttachment']
             switch = port['_relations']['LogicalSwitchConfig']
+            LOG.info('testing port |%s|', port['uuid'])
 
             if not queue:
+                LOG.info('port |%s| had no queue, getting instance',
+                         port['uuid'])
                 switch_dict = {'uuid': status['lswitch']['uuid'],
                                'name': switch['display_name'],
                                'tags': switch['tags'],
@@ -204,6 +207,7 @@ class HunterKiller(object):
                 # get the instance and its flavor rxtx_factor
                 get_instance = self.get_instance_by_port
                 instance = get_instance(port_dict, join_flavor=True) or {}
+                LOG.info('found instance |%s|', instance.get('uuid', ''))
                 port_dict['instance_id'] = instance.get('uuid', '')
                 port_dict['instance_flavor'] = \
                                       instance.get('instance_type_id', '')
