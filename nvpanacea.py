@@ -65,18 +65,13 @@ def main():
             print hk.calls_made()
         return
     elif args.type == 'no_queue':
-        bad_ports = hk.get_no_queue_ports()
-        columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_flavor',
-                   'rxtx_cap', 'rxtx_factor', 'rxtx_base', 'switch_name')
+        bad_ports = hk.no_queue_ports(args.action)
         if args.action == 'list':
+            columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_flavor',
+                       'rxtx_cap', 'rxtx_factor', 'rxtx_base', 'switch_name')
             utils.print_list(bad_ports, columns)
-            print len(bad_ports), 'queueless ports found'
-            print hk.calls_made()
-        elif args.action in ('fix', 'fixnoop'):
-            for port in bad_ports:
-                hk.repair_port_queue(port, args.action)
-            print len(bad_ports), 'queueless ports fixed'
-            print hk.calls_made()
+        print len(bad_ports), 'queueless ports found'
+        print hk.calls_made()
     else:
         raise Exception('type specefication not supported')
 

@@ -21,6 +21,7 @@ class HunterKiller(object):
         self.nvp = NVP(nvp_url, nvp_username, nvp_password)
         self.nova = Nova(nova_url, nova_username, nova_password)
         self.melange = Melange(melange_url, melange_username, melange_password)
+        self.ports_checked = 0
 
     def get_instance_by_port(self, port, join_flavor=False):
         instance_id = port['instance_id']
@@ -58,6 +59,8 @@ class HunterKiller(object):
         bad_port_list = []
 #        for port_group in izip_longest(*([iter(ports)] * 10)):
         for port in ports:
+            self.ports_checked += 1
+
             # pull out relations for easy access
             queue = port['_relations']['LogicalQueueConfig']
             status = port['_relations']['LogicalPortStatus']
@@ -166,13 +169,15 @@ class HunterKiller(object):
                 # TODO: delete the queue we just made
                 pass
 
-    def get_no_queue_ports(self):
+    def no_queue_ports(self, action):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
         ports = self.nvp.get_ports(relations)
 
         bad_port_list = []
         for port in ports:
+            self.ports_checked += 1
+
             # pull out relations for easy access
             queue = port['_relations']['LogicalQueueConfig']
             status = port['_relations']['LogicalPortStatus']
@@ -213,13 +218,20 @@ class HunterKiller(object):
                                       instance.get('instance_type_id', '')
                 port_dict['rxtx_factor'] = instance.get('rxtx_factor', '')
 
+                # return list for option listing
                 bad_port_list.append(port_dict)
+
+                # repair if fix action
+                if action in ('fix', 'fixnoop'):
+                    self.repair_port_queue(port_dict, action)
 
         return bad_port_list
 
     def calls_made(self):
-        msg = '%s calls to nvp\n%s calls to melange\n%s calls to nova'
-        return msg % (self.nvp.calls, self.melange.calls, self.nova.calls)
+        msg = ('%s ports processed\n%s calls to nvp\n'
+               '%s calls to melange\n%s calls to nova')
+        return msg % (self.ports_checked, self.nvp.calls,
+                      self.melange.calls, self.nova.calls)
 
 
 class NVP(object):
