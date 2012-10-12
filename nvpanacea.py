@@ -67,8 +67,7 @@ def main():
     elif args.type == 'no_queue':
         bad_ports = hk.no_queue_ports(args.action)
         if args.action == 'list':
-            columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_flavor',
-                       'rxtx_cap', 'rxtx_factor', 'rxtx_base', 'switch_name')
+            columns = ('uuid', 'vif_uuid', 'switch_name')
             utils.print_list(bad_ports, columns)
         print len(bad_ports), 'queueless ports found'
         print hk.calls_made()

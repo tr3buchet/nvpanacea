@@ -205,24 +205,34 @@ class HunterKiller(object):
                              'rxtx_cap': queue.get('max_bandwidth_rate', ''),
                              'instance_id': self.get_tag(queue, 'vmid') or ''}
 
-                qp = self.get_qos_pool(port_dict)
-                port_dict['qos_pool'] = qp
-                port_dict['rxtx_base'] = qp['max_bandwidth_rate'] if qp else ''
-
-                # get the instance and its flavor rxtx_factor
-                get_instance = self.get_instance_by_port
-                instance = get_instance(port_dict, join_flavor=True) or {}
-                LOG.info('found instance |%s|', instance.get('uuid', ''))
-                port_dict['instance_id'] = instance.get('uuid', '')
-                port_dict['instance_flavor'] = \
-                                      instance.get('instance_type_id', '')
-                port_dict['rxtx_factor'] = instance.get('rxtx_factor', '')
-
-                # return list for option listing
+                # append to return list for optional listing
                 bad_port_list.append(port_dict)
 
-                # repair if fix action
+                # get rxtx datas and repair if fix action
                 if action in ('fix', 'fixnoop'):
+                    # grab bandwidth from qos pool
+                    qp = self.get_qos_pool(port_dict)
+                    port_dict['qos_pool'] = qp
+                    port_dict['rxtx_base'] = \
+                            qp['max_bandwidth_rate'] if qp else ''
+
+                    try:
+                        # get the instance and its flavor rxtx_factor
+                        get_inst = self.get_instance_by_port
+                        instance = get_inst(port_dict, join_flavor=True) or {}
+                        LOG.info('found instance |%s|',
+                                 instance.get('uuid', ''))
+                        port_dict['instance_id'] = instance.get('uuid', '')
+                        port_dict['instance_flavor'] = \
+                                          instance.get('instance_type_id', '')
+                        port_dict['rxtx_factor'] = \
+                                          instance.get('rxtx_factor', '')
+
+                    except:
+                        LOG.error('error getting instance, '
+                                  'skipping repair phase')
+                        continue
+
                     self.repair_port_queue(port_dict, action)
 
         return bad_port_list
