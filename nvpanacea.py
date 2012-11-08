@@ -40,39 +40,45 @@ def main():
                         help="list, fix, or fixnoop",
                         default='list')
     parser.add_argument('-t', '--type', action='store',
-                        help="orphan or no_queue",
-                        default='no_queue')
+                        help="orphan_ports or no_queue_ports",
+                        default='no_queue_ports')
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel))
 
-    hk = HunterKiller(**utils.get_connection_creds(args.environment))
+    hk = HunterKiller(action=args.action,
+                      **utils.get_connection_creds(args.environment))
 
     print 'iz in yur controller iteratin yur ports'
 
-    if args.type == 'orphan':
-        bad_ports = hk.get_orphaned_ports()
-        if args.action == 'list':
-            columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_state',
-                       'instance_terminated_at', 'link_status',
-                       'fabric_status')
-            utils.print_list(bad_ports, columns)
-            print len(bad_ports), 'orphaned ports found'
-            print hk.calls_made()
-        elif args.action in ('fix', 'fixnoop'):
-            for port in bad_ports:
-                hk.delete_port(port, args.action)
-            print len(bad_ports), 'orphaned ports deleted'
-            print hk.calls_made()
-        return
-    elif args.type == 'no_queue':
-        bad_ports = hk.no_queue_ports(args.action)
-        if args.action == 'list':
-            columns = ('uuid', 'vif_uuid', 'switch_name')
-            utils.print_list(bad_ports, columns)
-        print len(bad_ports), 'queueless ports found'
-        print hk.calls_made()
-    else:
-        raise Exception('type specefication not supported')
+    if args.type not in ('orphan_ports', 'no_queue_ports'):
+        raise Exception('type not supported')
+    hk.port_manoeuvre(args.type)
+    print hk.calls_made()
+
+#     if args.type == 'orphan':
+#         bad_ports = hk.get_orphaned_ports()
+#         if args.action == 'list':
+#             columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_state',
+#                        'instance_terminated_at', 'link_status',
+#                        'fabric_status')
+#             utils.print_list(bad_ports, columns)
+#             print len(bad_ports), 'orphaned ports found'
+#             print hk.calls_made()
+#         elif args.action in ('fix', 'fixnoop'):
+#             for port in bad_ports:
+#                 hk.delete_port(port, args.action)
+#             print len(bad_ports), 'orphaned ports deleted'
+#             print hk.calls_made()
+#         return
+#     elif args.type == 'no_queue':
+#         bad_ports = hk.no_queue_ports(args.action)
+#         if args.action == 'list':
+#             columns = ('uuid', 'vif_uuid', 'switch_name')
+#             utils.print_list(bad_ports, columns)
+#         print len(bad_ports), 'queueless ports found'
+#         print hk.calls_made()
+#     else:
+#         raise Exception('type specefication not supported')
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 import aiclib
 import logging
-import re
 import requests
 from requests.auth import HTTPBasicAuth
 from utils import IterableQuery
@@ -15,16 +14,19 @@ zone_qos_pool_map = {'public': 'pub_base_rate',
 
 
 class HunterKiller(object):
-    def __init__(self, nvp_url, nvp_username, nvp_password,
-                       nova_url, nova_username, nova_password,
-                       melange_url, melange_username, melange_password):
+    def __init__(self, action,
+                 nvp_url, nvp_username, nvp_password,
+                 nova_url, nova_username, nova_password,
+                 melange_url, melange_username, melange_password):
+        self.action = action
         self.nvp = NVP(nvp_url, nvp_username, nvp_password)
         self.nova = Nova(nova_url, nova_username, nova_password)
         self.melange = Melange(melange_url, melange_username, melange_password)
         self.ports_checked = 0
+        self.tree = {}
 
     def get_instance_by_port(self, port, join_flavor=False):
-        instance_id = port['instance_id']
+        instance_id = port['queue'].get('vmid')
 
         # get instance_id from melange if we don't already have it
         if not instance_id:
@@ -39,9 +41,9 @@ class HunterKiller(object):
             return self.nova.get_instance_by_id(instance_id,
                                                 join_flavor)
 
-    def delete_port(self, port, action):
+    def delete_port(self, port):
         LOG.action('delete port |%s|', port['uuid'])
-        if action == 'fix':
+        if self.action == 'fix':
             try:
                 return self.nvp.delete_port(port)
             except aiclib.nvp.ResourceNotFound:
@@ -51,47 +53,41 @@ class HunterKiller(object):
 #        args = [iter(iterable)] * number
 #        return izip_longest(*args)
 
-    def get_orphaned_ports(self):
-        relations = ('LogicalPortStatus', 'LogicalPortAttachment',
-                     'LogicalQueueConfig')
-        ports = self.nvp.get_ports(relations)
-
-        bad_port_list = []
 #        for port_group in izip_longest(*([iter(ports)] * 10)):
-        for port in ports:
-            self.ports_checked += 1
 
-            # pull out relations for easy access
-            queue = port['_relations']['LogicalQueueConfig']
-            status = port['_relations']['LogicalPortStatus']
-            attachment = port['_relations']['LogicalPortAttachment']
-            lstatus = 'up' if status['link_status_up'] else 'down'
-            fstatus = 'up' if status['fabric_status_up'] else 'down'
-            port_dict = {'uuid': port.get('uuid', ''),
-                         'lswitch_uuid': status['lswitch']['uuid'],
-                         'vif_uuid': attachment.get('vif_uuid', ''),
-                         'link_status': lstatus,
-                         'fabric_status': fstatus,
-                         'instance_id': self.get_tag(queue, 'vmid') or ''}
+    def orphaned_port(self, nvp_port):
+        # pull out relations for easy access
+        queue = nvp_port['_relations']['LogicalQueueConfig']
+        status = nvp_port['_relations']['LogicalPortStatus']
+        attachment = nvp_port['_relations']['LogicalPortAttachment']
+        lstatus = 'up' if status['link_status_up'] else 'down'
+        fstatus = 'up' if status['fabric_status_up'] else 'down'
+        port = {'uuid': nvp_port.get('uuid', ''),
+                'lswitch_uuid': status['lswitch']['uuid'],
+                'vif_uuid': attachment.get('vif_uuid', ''),
+                'link_status': lstatus,
+                'fabric_status': fstatus,
+                'instance_id': self.get_tag(queue, 'vmid') or ''}
 
-            # get the instance
-            instance = self.get_instance_by_port(port_dict)
-            if instance:
-                port_dict['instance_id'] = instance['uuid']
-                port_dict['instance_state'] = instance['vm_state']
-                port_dict['instance_terminated_at'] = \
-                        instance['terminated_at'] or ''
-            else:
-                port_dict['instance_id'] = None
-                port_dict['instance_state'] = None
-                port_dict['instance_terminated_at'] = None
+        # get the instance
+        instance = self.get_instance_by_port(port)
+        if instance:
+            port['instance_id'] = instance['uuid']
+            port['instance_state'] = instance['vm_state']
+            port['instance_terminated_at'] = \
+                    instance['terminated_at'] or ''
+        else:
+            port['instance_id'] = None
+            port['instance_state'] = None
+            port['instance_terminated_at'] = None
 
-            # only return ports with no instance
-            # TODO: only return ports if instance_terminated_at > x hours
-            if not instance or instance['vm_state'] == 'deleted':
-                bad_port_list.append(port_dict)
-
-        return bad_port_list
+        # only delete ports with no instance
+        # TODO: only return ports if instance_terminated_at > x hours
+        if not instance or instance['vm_state'] == 'deleted':
+            if self.action == 'list':
+                print
+            elif self.action in ('fix', 'fixnoop'):
+                self.delete_port(port)
 
     def get_tag(self, obj, tag_name):
         if 'tags' in obj:
@@ -99,9 +95,22 @@ class HunterKiller(object):
                 if tag['scope'] == tag_name:
                     return tag['tag']
 
-    def is_tenant_switch(self, switch):
-        os_tid = self.get_tag(switch, 'os_tid')
-        return not re.search('-c[0-9]{4}$', os_tid)
+    def is_isolated_switch(self, switch):
+        # if switch  has a qos pool, it is not isolated
+        qos_pool_id = self.get_tag(switch, 'qos_pool')
+        return False if qos_pool_id else True
+
+    def is_public_switch(self, switch):
+        zone_id = switch['transport_zone_uuid']
+        zone = self.nvp.get_transport_zone_by_id(zone_id)
+        zone_name = zone['display_name']
+        return zone_name == 'public'
+
+    def is_snet_switch(self, switch):
+        zone_id = switch['transport_zone_uuid']
+        zone = self.nvp.get_transport_zone_by_id(zone_id)
+        zone_name = zone['display_name']
+        return zone_name == 'private'
 
     def get_qos_pool_from_switch(self, switch):
         qos_pool_id = self.get_tag(switch, 'qos_pool')
@@ -120,8 +129,8 @@ class HunterKiller(object):
             return qos_pool
 
         msg = 'port |%s| switch |%s||%s| does not have a qos pool!'
-        LOG.error(msg, port['uuid'], port['switch']['uuid'],
-                  port['switch']['name'])
+        LOG.warn(msg, port['uuid'], port['switch']['uuid'],
+                 port['switch']['name'])
 
         # lswitch didn't have a qos_pool, have to use transport zone
         zone_id = port['switch']['transport_zone_uuid']
@@ -133,109 +142,210 @@ class HunterKiller(object):
         LOG.error(msg, port['uuid'], port['switch']['uuid'],
                   port['switch']['name'])
 
-    def repair_port_queue(self, port, action):
-        LOG.action('fix queue for port |%s|', port['uuid'])
-        if port['rxtx_cap']:
+    def create_queue(self, port):
+        LOG.action('create queue for port |%s|', port['uuid'])
+        if port['queue']:
             LOG.warn('port |%s| already has a queue!', port['uuid'])
             return
 
-        # TODO handle tenant switch ports
-        if self.is_tenant_switch(port['switch']):
-            msg = 'port |%s| is a tenant network port, skipping for now'
-            LOG.warn(msg, port['uuid'])
-            return
-
-        if not port['rxtx_base']:
-            msg = "port |%s| can't fix queue with no switch qos_pool"
-            LOG.error(msg, port['uuid'])
-
         queue = {'display_name': port['qos_pool']['uuid'],
-                 'vmid': port['instance_id']}
+                 'vmid': port['instance']['uuid']}
         try:
-            queue['rxtx_cap'] = int(port['rxtx_base'] * port['rxtx_factor'])
+            rxtx_factor = port['instance']['rxtx_factor']
+            rxtx_base = port['qos_pool']['max_bandwidth_rate']
+            queue['max_bandwidth_rate'] = int(rxtx_base) * int(rxtx_factor)
         except ValueError:
             LOG.error('rxtx_cap calculation failed. base: |%s|, factor: |%s|',
                       port['rxtx_base'], port['rxtx_factor'])
             return
 
         LOG.action('creating queue: |%s|', queue)
-        if action == 'fix':
-            queue = self.nvp.create_queue(**queue)
-            LOG.action('associating port |%s| with queue |%s|',
-                       port['uuid'], queue['uuid'])
-            try:
-                port = self.nvp.port_update_queue(port, queue['uuid'])
-            except aiclib.nvp.ResourceNotFound:
-                # TODO: delete the queue we just made
-                pass
+        if self.action == 'fix':
+            nvp_queue = self.nvp.create_queue(**queue)
+            if nvp_queue:
+                return {'uuid': nvp_queue['uuid'],
+                        'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
+                        'vmid': self.get_tag(nvp_queue, 'vmid') or ''}
+        # return a fake uuid for noop mode
+        queue['uuid'] = 'fake'
+        return queue
 
-    def no_queue_ports(self, action):
+    def associate_queue(self, port, queue):
+        LOG.action('associating port |%s| with queue |%s|',
+                   port['uuid'], queue['uuid'])
+        if self.action == 'fix':
+            try:
+                self.nvp.port_update_queue(port, queue['uuid'])
+                port['queue'] = queue
+            except aiclib.nvp.ResourceNotFound:
+                LOG.error('port was not associated!')
+                # TODO: delete the queue we just made
+        else:
+            # in fixnoop, we need to "associate" the queue for similar
+            # behavior to what happens in fix mode
+            port['queue'] = queue
+
+    def add_port_to_tree(self, port):
+        if port['queue'].get('vmid'):
+            instance_id = port['queue']['vmid']
+        elif port['instance'].get('uuid'):
+            instance_id = port['instance']['uuid']
+        else:
+            return
+
+        if instance_id in self.tree:
+            self.tree[instance_id]['ports'].append(port)
+        else:
+            self.tree[instance_id] = {'ports': [port]}
+
+    def populate_tree(self, nvp_ports, populate_instance=False):
+        for nvp_port in nvp_ports:
+            self.ports_checked += 1
+            nvp_queue = nvp_port['_relations']['LogicalQueueConfig']
+            status = nvp_port['_relations']['LogicalPortStatus']
+            attachment = nvp_port['_relations']['LogicalPortAttachment']
+            nvp_switch = nvp_port['_relations']['LogicalSwitchConfig']
+            LOG.info('populating port |%s|', nvp_port['uuid'])
+
+            switch = {'uuid': status['lswitch']['uuid'],
+                      'name': nvp_switch['display_name'],
+                      'tags': nvp_switch['tags'],
+                      'transport_zone_uuid': \
+                          nvp_switch['transport_zones'][0]['zone_uuid']}
+
+            queue = {}
+            if nvp_queue:
+                queue = {'uuid': nvp_queue['uuid'],
+                         'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
+                         'vmid': self.get_tag(nvp_queue, 'vmid') or ''}
+
+            port = {'uuid': nvp_port.get('uuid', ''),
+                    'switch': switch,
+                    'queue': queue,
+                    'vif_uuid': attachment.get('vif_uuid', ''),
+                    'isolated': self.is_isolated_switch(switch),
+                    'public': self.is_public_switch(switch),
+                    'snet': self.is_snet_switch(switch)}
+
+            qp = self.get_qos_pool(port)
+            qos_pool = {'uuid': qp['uuid'],
+                        'max_bandwidth_rate':
+                            qp['max_bandwidth_rate'] if qp else ''}
+            port['qos_pool'] = qos_pool
+
+            port['instance'] = {}
+            if populate_instance or not port['queue']:
+                try:
+                    get_inst = self.get_instance_by_port
+                    instance = get_inst(port, join_flavor=True) or {}
+                    port['instance'] = instance
+                except:
+                    pass
+
+            self.add_port_to_tree(port)
+
+    def port_manoeuvre(self, type):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        ports = self.nvp.get_ports(relations)
+        nvp_ports = self.nvp.get_ports(relations)
 
-        bad_port_list = []
-        for port in ports:
-            self.ports_checked += 1
+        print 'populating tree, check out INFO if you want to watch'
+        self.populate_tree(nvp_ports)
 
-            # pull out relations for easy access
-            queue = port['_relations']['LogicalQueueConfig']
-            status = port['_relations']['LogicalPortStatus']
-            attachment = port['_relations']['LogicalPortAttachment']
-            switch = port['_relations']['LogicalSwitchConfig']
-            LOG.info('testing port |%s|', port['uuid'])
+        if type == 'orphan_ports':
+            handle_ports = self.orphan_port
+        elif type == 'no_queue_ports':
+            handle_ports = self.no_queue_ports
 
-            if not queue:
-                LOG.info('port |%s| had no queue, getting instance',
-                         port['uuid'])
-                switch_dict = {'uuid': status['lswitch']['uuid'],
-                               'name': switch['display_name'],
-                               'tags': switch['tags'],
-                               'transport_zone_uuid': \
-                                     switch['transport_zones'][0]['zone_uuid']}
+        handle_ports()
 
-                # ignore tenant switch ports for now
-                if self.is_tenant_switch(switch_dict):
+    def no_queue_ports(self):
+        no_queues = 0
+        for instance_id, values in self.tree.iteritems():
+            ports = values['ports']
+            for port in ports:
+                if port['queue']:
                     continue
+                no_queues += 1
 
-                port_dict = {'uuid': port.get('uuid', ''),
-                             'switch': switch_dict,
-                             'switch_name': switch['display_name'],
-                             'vif_uuid': attachment.get('vif_uuid', ''),
-                             'rxtx_cap': queue.get('max_bandwidth_rate', ''),
-                             'instance_id': self.get_tag(queue, 'vmid') or ''}
+                if port['public']:
+                    msg = 'creating queue for public port |%s|'
+                    LOG.action(msg, port['uuid'])
+                    queue = self.create_queue(port)
+                    self.associate_queue(port, queue)
+                elif port['snet'] or port['isolated']:
+                    # other ports will be snet or isolated nw w/ queue
+                    other_ports = [p for p in self.tree[instance_id]['ports']
+                                   if p['queue'] and
+                                   (p['snet'] or p['isolated'])]
+                    if other_ports:
+                        msg = ('associating queue for snet/isolated port |%s| '
+                               'with snet/isolated port |%s| queue')
+                        other_port = other_ports[0]
+                        LOG.action(msg, port['uuid'], other_port['uuid'])
+                        self.associate_queue(port, other_port['queue'])
+                    else:
+                        msg = 'creating queue for snet/isolated port |%s|'
+                        LOG.action(msg, port['uuid'])
+                        queue = self.create_queue(port)
+                        self.associate_queue(port, queue)
+        print 'no queues ', no_queues
+        return
 
-                # append to return list for optional listing
-                bad_port_list.append(port_dict)
+        nvp_port = {}
+        # pull out relations for easy access
+        queue = nvp_port['_relations']['LogicalQueueConfig']
+        status = nvp_port['_relations']['LogicalPortStatus']
+        attachment = nvp_port['_relations']['LogicalPortAttachment']
+        nvp_switch = nvp_port['_relations']['LogicalSwitchConfig']
+        LOG.info('testing port |%s|', nvp_port['uuid'])
 
-                # get rxtx datas and repair if fix action
-                if action in ('fix', 'fixnoop'):
-                    # grab bandwidth from qos pool
-                    qp = self.get_qos_pool(port_dict)
-                    port_dict['qos_pool'] = qp
-                    port_dict['rxtx_base'] = \
-                            qp['max_bandwidth_rate'] if qp else ''
+        if not queue:
+            LOG.info('port |%s| had no queue, getting instance',
+                     nvp_port['uuid'])
+            switch = {'uuid': status['lswitch']['uuid'],
+                      'name': nvp_switch['display_name'],
+                      'tags': nvp_switch['tags'],
+                      'transport_zone_uuid': \
+                          nvp_switch['transport_zones'][0]['zone_uuid']}
 
-                    try:
-                        # get the instance and its flavor rxtx_factor
-                        get_inst = self.get_instance_by_port
-                        instance = get_inst(port_dict, join_flavor=True) or {}
-                        LOG.info('found instance |%s|',
-                                 instance.get('uuid', ''))
-                        port_dict['instance_id'] = instance.get('uuid', '')
-                        port_dict['instance_flavor'] = \
-                                          instance.get('instance_type_id', '')
-                        port_dict['rxtx_factor'] = \
-                                          instance.get('rxtx_factor', '')
+            port = {'uuid': nvp_port.get('uuid', ''),
+                    'switch': switch,
+                    'vif_uuid': attachment.get('vif_uuid', ''),
+                    'rxtx_cap': queue.get('max_bandwidth_rate', ''),
+                    'instance_id': self.get_tag(queue, 'vmid') or '',
+                    'isolated': self.is_isolated_switch(switch)}
 
-                    except:
-                        LOG.error('error getting instance, '
-                                  'skipping repair phase')
-                        continue
+            # take requested action
+            if self.action == 'list':
+                msg = 'port |%s| has no queue on switch |%s||%s|'
+                print msg % (port['uuid'], port['switch']['name'],
+                             port['switch']['uuid'])
+            elif self.action in ('fix', 'fixnoop'):
+                # grab bandwidth from qos pool
+                qp = self.get_qos_pool(port)
+                port['qos_pool_uuid'] = qp['uuid']
+                port['rxtx_base'] = \
+                        qp['max_bandwidth_rate'] if qp else ''
 
-                    self.repair_port_queue(port_dict, action)
+                try:
+                    # get the instance and its flavor rxtx_factor
+                    get_inst = self.get_instance_by_port
+                    instance = get_inst(port, join_flavor=True) or {}
+                    LOG.info('found instance |%s|',
+                             instance.get('uuid', ''))
+                    port['instance_id'] = instance.get('uuid', '')
+                    port['instance_flavor'] = \
+                                      instance.get('instance_type_id', '')
+                    port['rxtx_factor'] = \
+                                      instance.get('rxtx_factor', '')
 
-        return bad_port_list
+                except:
+                    LOG.error('error getting instance, '
+                              'skipping repair phase')
+                    return
+
+                self.repair_port_queue(port)
 
     def calls_made(self):
         msg = ('%s ports processed\n%s calls to nvp\n'
@@ -311,13 +421,13 @@ class NVP(object):
         query = self.connection.qos().query()
         return IterableQuery(self, query, limit)
 
-    def create_queue(self, display_name, vmid, rxtx_cap):
+    def create_queue(self, display_name, vmid, max_bandwidth_rate):
         self.calls += 1
         queue = self.connection.qos()
         queue.display_name(display_name)
         queue.tags({'scope': 'vmid',
                     'tag': vmid})
-        queue.maxbw_rate(rxtx_cap)
+        queue.maxbw_rate(max_bandwidth_rate)
         return queue.create()
 
     def delete_queue(self, id):
@@ -405,3 +515,8 @@ class Nova(MysqlJsonBridgeEndpoint):
             sql = 'select %s from instances where uuid="%s"'
         result = self.run_query(sql % (','.join(select_list), id))
         return self.first_result(result)
+
+
+class Port(dict):
+    def __repr__(self):
+        return self.__class__.__name__ + '(' + dict.__repr__(self) + ')'
