@@ -1,8 +1,11 @@
 import aiclib
-import logging
-import requests
 from requests.auth import HTTPBasicAuth
 from utils import IterableQuery
+import logging
+import requests
+import sys
+import time
+from datetime import timedelta
 
 
 LOG = logging.getLogger(__name__)
@@ -23,7 +26,6 @@ class HunterKiller(object):
         self.nova = Nova(nova_url, nova_username, nova_password)
         self.melange = Melange(melange_url, melange_username, melange_password)
         self.ports_checked = 0
-        self.tree = {}
 
     def get_instance_by_port(self, port, join_flavor=False):
         instance_id = port['queue'].get('vmid')
@@ -47,6 +49,7 @@ class HunterKiller(object):
             try:
                 return self.nvp.delete_port(port)
             except aiclib.nvp.ResourceNotFound:
+                # port went away in the mean time
                 pass
 
 #    def get_group_from_iter(self, iterable, number):
@@ -54,40 +57,6 @@ class HunterKiller(object):
 #        return izip_longest(*args)
 
 #        for port_group in izip_longest(*([iter(ports)] * 10)):
-
-    def orphaned_port(self, nvp_port):
-        # pull out relations for easy access
-        queue = nvp_port['_relations']['LogicalQueueConfig']
-        status = nvp_port['_relations']['LogicalPortStatus']
-        attachment = nvp_port['_relations']['LogicalPortAttachment']
-        lstatus = 'up' if status['link_status_up'] else 'down'
-        fstatus = 'up' if status['fabric_status_up'] else 'down'
-        port = {'uuid': nvp_port.get('uuid', ''),
-                'lswitch_uuid': status['lswitch']['uuid'],
-                'vif_uuid': attachment.get('vif_uuid', ''),
-                'link_status': lstatus,
-                'fabric_status': fstatus,
-                'instance_id': self.get_tag(queue, 'vmid') or ''}
-
-        # get the instance
-        instance = self.get_instance_by_port(port)
-        if instance:
-            port['instance_id'] = instance['uuid']
-            port['instance_state'] = instance['vm_state']
-            port['instance_terminated_at'] = \
-                    instance['terminated_at'] or ''
-        else:
-            port['instance_id'] = None
-            port['instance_state'] = None
-            port['instance_terminated_at'] = None
-
-        # only delete ports with no instance
-        # TODO: only return ports if instance_terminated_at > x hours
-        if not instance or instance['vm_state'] == 'deleted':
-            if self.action == 'list':
-                print
-            elif self.action in ('fix', 'fixnoop'):
-                self.delete_port(port)
 
     def get_tag(self, obj, tag_name):
         if 'tags' in obj:
@@ -185,20 +154,21 @@ class HunterKiller(object):
             # behavior to what happens in fix mode
             port['queue'] = queue
 
-    def add_port_to_tree(self, port):
+    def add_port_to_tree(self, port, tree):
         if port['queue'].get('vmid'):
             instance_id = port['queue']['vmid']
         elif port['instance'].get('uuid'):
             instance_id = port['instance']['uuid']
         else:
-            return
+            instance_id = 'unknown'
 
-        if instance_id in self.tree:
-            self.tree[instance_id]['ports'].append(port)
+        if instance_id in tree:
+            tree[instance_id]['ports'].append(port)
         else:
-            self.tree[instance_id] = {'ports': [port]}
+            tree[instance_id] = {'ports': [port]}
 
-    def populate_tree(self, nvp_ports, populate_instance=False):
+    def populate_tree(self, nvp_ports, type):
+        tree = {}
         for nvp_port in nvp_ports:
             self.ports_checked += 1
             nvp_queue = nvp_port['_relations']['LogicalQueueConfig']
@@ -222,6 +192,8 @@ class HunterKiller(object):
             port = {'uuid': nvp_port.get('uuid', ''),
                     'switch': switch,
                     'queue': queue,
+                    'link_status_up': status['link_status_up'],
+                    'fabric_status_up': status['fabric_status_up'],
                     'vif_uuid': attachment.get('vif_uuid', ''),
                     'isolated': self.is_isolated_switch(switch),
                     'public': self.is_public_switch(switch),
@@ -234,34 +206,57 @@ class HunterKiller(object):
             port['qos_pool'] = qos_pool
 
             port['instance'] = {}
-            if populate_instance or not port['queue']:
-                try:
-                    get_inst = self.get_instance_by_port
-                    instance = get_inst(port, join_flavor=True) or {}
-                    port['instance'] = instance
-                except:
-                    pass
+            if type == 'orphan_ports':
+                if not (port['link_status_up'] or port['fabric_status_up']):
+                    # only care about ports with link and fabric status down
+                    # get instance and add to tree
+                    # NOTE: only bad ports will be in tree
+                    try:
+                        get_inst = self.get_instance_by_port
+                        instance = get_inst(port, join_flavor=True) or {}
+                        port['instance'] = instance
+                    except:
+                        pass
+                    self.add_port_to_tree(port, tree)
+            elif type == 'no_queue_ports':
+                if not port['queue']:
+                    # only need instance for ports without a queue
+                    # NOTE: all ports will be in the tree for queue repair
+                    try:
+                        get_inst = self.get_instance_by_port
+                        instance = get_inst(port, join_flavor=True) or {}
+                        port['instance'] = instance
+                    except:
+                        pass
+                self.add_port_to_tree(port, tree)
 
-            self.add_port_to_tree(port)
+            sys.stdout.write('.')
+            sys.stdout.flush()
+        print
+        return tree
 
-    def port_manoeuvre(self, type):
+    def port_manoeuvre(self, type, limit=None):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports(relations)
+        self.start_time = time.time()
+        nvp_ports = self.nvp.get_ports(relations, limit=limit)
 
-        print 'populating tree, check out INFO if you want to watch'
-        self.populate_tree(nvp_ports)
+        print ('populating tree, check out loglevel INFO if you want to watch,'
+              ' a . is a port')
 
+        tree = self.populate_tree(nvp_ports, type)
         if type == 'orphan_ports':
-            handle_ports = self.orphan_port
+            self.fix_orphan_ports(tree)
         elif type == 'no_queue_ports':
-            handle_ports = self.no_queue_ports
+            self.fix_no_queue_ports(tree)
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
 
-        handle_ports()
-
-    def no_queue_ports(self):
+    def fix_no_queue_ports(self, tree):
         no_queues = 0
-        for instance_id, values in self.tree.iteritems():
+        for instance_id, values in tree.iteritems():
+            if instance_id == 'unknown':
+                # these are the ports that had queues, instance wasn't needed
+                continue
             ports = values['ports']
             for port in ports:
                 if port['queue']:
@@ -275,9 +270,9 @@ class HunterKiller(object):
                     self.associate_queue(port, queue)
                 elif port['snet'] or port['isolated']:
                     # other ports will be snet or isolated nw w/ queue
-                    other_ports = [p for p in self.tree[instance_id]['ports']
+                    other_ports = [p for p in tree[instance_id]['ports']
                                    if p['queue'] and
-                                   (p['snet'] or p['isolated'])]
+                                      (p['snet'] or p['isolated'])]
                     if other_ports:
                         msg = ('associating queue for snet/isolated port |%s| '
                                'with snet/isolated port |%s| queue')
@@ -289,69 +284,35 @@ class HunterKiller(object):
                         LOG.action(msg, port['uuid'])
                         queue = self.create_queue(port)
                         self.associate_queue(port, queue)
-        print 'no queues ', no_queues
-        return
+        print 'queues fixed:', no_queues
 
-        nvp_port = {}
-        # pull out relations for easy access
-        queue = nvp_port['_relations']['LogicalQueueConfig']
-        status = nvp_port['_relations']['LogicalPortStatus']
-        attachment = nvp_port['_relations']['LogicalPortAttachment']
-        nvp_switch = nvp_port['_relations']['LogicalSwitchConfig']
-        LOG.info('testing port |%s|', nvp_port['uuid'])
+    def fix_orphan_ports(self, tree):
+        orphans = 0
+        for instance_id, values in tree.iteritems():
+            ports = values['ports']
+            if instance_id == 'unknown':
+                # ports with no instance are orphans
+                for port in ports:
+                    orphans += 1
+                    LOG.action('found port |%s| w/no instance', port['uuid'])
+                    self.delete_port(port)
+            else:
+                # ports with deleted instances are orphans
+                for port in ports:
+                    if port['instance'].get('vm_state') == 'deleted':
+                        orphans += 1
+                        msg = 'found port |%s| w/instance |%s| in state |%s|'
+                        LOG.action(msg, port['uuid'], instance_id,
+                                        port['instance']['vm_state'])
+                        self.delete_port(port)
+        print 'orphans fixed:', orphans
 
-        if not queue:
-            LOG.info('port |%s| had no queue, getting instance',
-                     nvp_port['uuid'])
-            switch = {'uuid': status['lswitch']['uuid'],
-                      'name': nvp_switch['display_name'],
-                      'tags': nvp_switch['tags'],
-                      'transport_zone_uuid': \
-                          nvp_switch['transport_zones'][0]['zone_uuid']}
-
-            port = {'uuid': nvp_port.get('uuid', ''),
-                    'switch': switch,
-                    'vif_uuid': attachment.get('vif_uuid', ''),
-                    'rxtx_cap': queue.get('max_bandwidth_rate', ''),
-                    'instance_id': self.get_tag(queue, 'vmid') or '',
-                    'isolated': self.is_isolated_switch(switch)}
-
-            # take requested action
-            if self.action == 'list':
-                msg = 'port |%s| has no queue on switch |%s||%s|'
-                print msg % (port['uuid'], port['switch']['name'],
-                             port['switch']['uuid'])
-            elif self.action in ('fix', 'fixnoop'):
-                # grab bandwidth from qos pool
-                qp = self.get_qos_pool(port)
-                port['qos_pool_uuid'] = qp['uuid']
-                port['rxtx_base'] = \
-                        qp['max_bandwidth_rate'] if qp else ''
-
-                try:
-                    # get the instance and its flavor rxtx_factor
-                    get_inst = self.get_instance_by_port
-                    instance = get_inst(port, join_flavor=True) or {}
-                    LOG.info('found instance |%s|',
-                             instance.get('uuid', ''))
-                    port['instance_id'] = instance.get('uuid', '')
-                    port['instance_flavor'] = \
-                                      instance.get('instance_type_id', '')
-                    port['rxtx_factor'] = \
-                                      instance.get('rxtx_factor', '')
-
-                except:
-                    LOG.error('error getting instance, '
-                              'skipping repair phase')
-                    return
-
-                self.repair_port_queue(port)
-
-    def calls_made(self):
+    def print_calls_made(self):
         msg = ('%s ports processed\n%s calls to nvp\n'
-               '%s calls to melange\n%s calls to nova')
-        return msg % (self.ports_checked, self.nvp.calls,
-                      self.melange.calls, self.nova.calls)
+               '%s calls to melange\n%s calls to nova\n'
+               'time taken %s')
+        print msg % (self.ports_checked, self.nvp.calls,
+                     self.melange.calls, self.nova.calls, self.time_taken)
 
 
 class NVP(object):
@@ -381,7 +342,7 @@ class NVP(object):
 
     def delete_port(self, port):
         self.calls += 1
-        self.connection.lswitch_port(port['lswitch_uuid'],
+        self.connection.lswitch_port(port['switch']['uuid'],
                                      port['uuid']).delete()
 
     def get_ports(self, relations=None, limit=None):

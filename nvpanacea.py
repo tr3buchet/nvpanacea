@@ -31,14 +31,17 @@ def main():
     parser.add_argument('-l', '--list', action=_ListAction,
                        dest='listenvs',
                        help='list all configured environments')
+    parser.add_argument('--limit', type=int, action='store',
+                        help="limit port selection to number specified",
+                        default=None)
     parser.add_argument('--loglevel', action='store',
             help="set log level: DEBUG, INFO, WARN, ACTION, ERROR..",
                         default='ACTION')
     parser.add_argument('-e', '--environment', action='store',
                         help="Environment to run against, for options use -l")
     parser.add_argument('-a', '--action', action='store',
-                        help="list, fix, or fixnoop",
-                        default='list')
+                        help="fix or fixnoop",
+                        default='fixnoop')
     parser.add_argument('-t', '--type', action='store',
                         help="orphan_ports or no_queue_ports",
                         default='no_queue_ports')
@@ -48,12 +51,12 @@ def main():
     hk = HunterKiller(action=args.action,
                       **utils.get_connection_creds(args.environment))
 
-    print 'iz in yur controller iteratin yur ports'
+    print 'iz in yur controller iteratin yur ports (%s)' % args.action
 
     if args.type not in ('orphan_ports', 'no_queue_ports'):
         raise Exception('type not supported')
-    hk.port_manoeuvre(args.type)
-    print hk.calls_made()
+    hk.port_manoeuvre(args.type, args.limit)
+    hk.print_calls_made()
 
 #     if args.type == 'orphan':
 #         bad_ports = hk.get_orphaned_ports()
