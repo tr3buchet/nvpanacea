@@ -2,6 +2,7 @@ import argparse
 import logging
 from hunter_killer import HunterKiller
 import utils
+import sys
 
 
 LOG = logging.getLogger(__name__)
@@ -43,18 +44,20 @@ def main():
                         help="fix or fixnoop",
                         default='fixnoop')
     parser.add_argument('-t', '--type', action='store',
-                        help="orphan_ports or no_queue_ports",
+                        help="orphan_ports, no_queue_ports, or add_vmids",
                         default='no_queue_ports')
     args = parser.parse_args()
-    logging.basicConfig(level=getattr(logging, args.loglevel))
+    logging.basicConfig(level=getattr(logging, args.loglevel),
+                        stream=sys.stdout)
 
     hk = HunterKiller(action=args.action,
                       **utils.get_connection_creds(args.environment))
 
     print 'iz in yur controller iteratin yur ports (%s)' % args.action
 
-    if args.type not in ('orphan_ports', 'no_queue_ports'):
-        raise Exception('type not supported')
+    types = ['orphan_ports', 'no_queue_ports', 'no_vmids']
+    if args.type not in types:
+        raise Exception('type not supported, choose from %s' % types)
     hk.port_manoeuvre(args.type, args.limit)
     hk.print_calls_made()
 

@@ -28,7 +28,11 @@ class HunterKiller(object):
         self.ports_checked = 0
 
     def get_instance_by_port(self, port, join_flavor=False):
-        instance_id = port['queue'].get('vmid')
+        instance_id = port['vmid']
+
+        # vmid tag wasn't on port, check the queue
+        if not instance_id:
+            instance_id = port['queue'].get('vmid')
 
         # get instance_id from melange if we don't already have it
         if not instance_id:
@@ -154,8 +158,19 @@ class HunterKiller(object):
             # behavior to what happens in fix mode
             port['queue'] = queue
 
+    def port_add_vmid(self, port, vmid):
+        LOG.action('adding vmid |%s| to port |%s| tag', vmid, port['uuid'])
+        if self.action == 'fix':
+            self.nvp.port_add_vmid(port, vmid)
+        else:
+            # in fixnoop, we need to "associate" the queue for similar
+            # behavior to what happens in fix mode
+            port['vmid'] = vmid
+
     def add_port_to_tree(self, port, tree):
-        if port['queue'].get('vmid'):
+        if port['vmid']:
+            instance_id = port['vmid']
+        elif port['queue'].get('vmid'):
             instance_id = port['queue']['vmid']
         elif port['instance'].get('uuid'):
             instance_id = port['instance']['uuid']
@@ -197,7 +212,8 @@ class HunterKiller(object):
                     'vif_uuid': attachment.get('vif_uuid', ''),
                     'isolated': self.is_isolated_switch(switch),
                     'public': self.is_public_switch(switch),
-                    'snet': self.is_snet_switch(switch)}
+                    'snet': self.is_snet_switch(switch),
+                    'vmid': self.get_tag(nvp_port, 'vmid') or ''}
 
             qp = self.get_qos_pool(port)
             qos_pool = {'uuid': qp['uuid'],
@@ -210,17 +226,17 @@ class HunterKiller(object):
                 if not (port['link_status_up'] or port['fabric_status_up']):
                     # only care about ports with link and fabric status down
                     # get instance and add to tree
-                    # NOTE: only bad ports will be in tree
+                    # NOTE: only link/fabric down ports will be in tree
                     try:
-                        get_inst = self.get_instance_by_port
-                        instance = get_inst(port, join_flavor=True) or {}
-                        port['instance'] = instance
+                        port['instance'] = self.get_instance_by_port(port)
+                        port['instance'] = port['instance'] or {}
                     except:
                         pass
                     self.add_port_to_tree(port, tree)
             elif type == 'no_queue_ports':
                 if not port['queue']:
                     # only need instance for ports without a queue
+                    # otherwise we can just use the queue (more efficient)
                     # NOTE: all ports will be in the tree for queue repair
                     try:
                         get_inst = self.get_instance_by_port
@@ -229,6 +245,18 @@ class HunterKiller(object):
                     except:
                         pass
                 self.add_port_to_tree(port, tree)
+            elif type == 'no_vmids':
+                if not port['vmid']:
+                    if not port['queue']:
+                        # only need instance for ports without a queue
+                        # otherwise we can just use the queue (more efficient)
+                        # NOTE: only ports without vmid will be in the tree
+                        try:
+                            port['instance'] = self.get_instance_by_port(port)
+                            port['instance'] = port['instance'] or {}
+                        except:
+                            pass
+                    self.add_port_to_tree(port, tree)
 
             sys.stdout.write('.')
             sys.stdout.flush()
@@ -249,7 +277,21 @@ class HunterKiller(object):
             self.fix_orphan_ports(tree)
         elif type == 'no_queue_ports':
             self.fix_no_queue_ports(tree)
+        elif type == 'no_vmids':
+            self.add_vmids(tree)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+
+    def add_vmids(self, tree):
+        no_vmids = 0
+        for instance_id, values in tree.iteritems():
+            if instance_id == 'unknown':
+                # these are the ports with unknown instance, probably orphan
+                continue
+            for port in values['ports']:
+                if not port['vmid']:
+                    no_vmids += 1
+                    self.port_add_vmid(port, instance_id)
+        print 'vmids added:', no_vmids
 
     def fix_no_queue_ports(self, tree):
         no_queues = 0
@@ -345,12 +387,27 @@ class NVP(object):
         self.connection.lswitch_port(port['switch']['uuid'],
                                      port['uuid']).delete()
 
+    def get_port(self, port):
+        # get an nvp port form our local dict object
+        self.calls += 1
+        query = self.connection.lswitch_port(port['switch']['uuid'],
+                                             port['uuid']).query().results()
+        try:
+            return query['results'][0]
+        except (KeyError, IndexError):
+            return None
+
     def get_ports(self, relations=None, limit=None):
         query = self.connection.lswitch_port('*').query()
 
         # append length to query
+        # passing this only helps for queries < 1000
+        # all greater length queries will use 1000 as page size
+        # so 1001 will consume 2 full 1000 port queries
+        # this is at this point a silly optimization
         if limit:
-            query = query.length(limit)
+            nvp_page_length = 1000 if limit > 1000 else limit
+            query = query.length(nvp_page_length)
 
         if relations:
             # handle relations
@@ -365,6 +422,25 @@ class NVP(object):
                                             port['uuid'])
         port.qosuuid(queue_id)
         return port.update()
+
+    def port_add_vmid(self, port, vmid):
+        self.calls += 1
+        nvp_port = self.get_port(port)
+
+        new_tag = {'scope': 'vmid',
+                   'tag': vmid}
+
+        # get existing tags, if any, and append vmid tag
+        if 'tags' in nvp_port:
+            tags = nvp_port['tags']
+            tags.append(new_tag)
+        else:
+            tags = [new_tag]
+
+        port_query_obj = self.connection.lswitch_port(port['switch']['uuid'],
+                                                      port['uuid'])
+        port_query_obj.tags(tags)
+        return port_query_obj.update()
 
     #################### SWITCHES #############################################
 
