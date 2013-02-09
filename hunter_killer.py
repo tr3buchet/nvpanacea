@@ -230,8 +230,8 @@ class HunterKiller(object):
                     try:
                         port['instance'] = self.get_instance_by_port(port)
                         port['instance'] = port['instance'] or {}
-                    except:
-                        pass
+                    except Exception as e:
+                        LOG.error(e)
                     self.add_port_to_tree(port, tree)
             elif type == 'no_queue_ports':
                 if not port['queue']:
@@ -242,8 +242,8 @@ class HunterKiller(object):
                         get_inst = self.get_instance_by_port
                         instance = get_inst(port, join_flavor=True) or {}
                         port['instance'] = instance
-                    except:
-                        pass
+                    except Exception as e:
+                        LOG.error(e)
                 self.add_port_to_tree(port, tree)
             elif type == 'no_vmids':
                 if not port['vmid']:
@@ -254,8 +254,8 @@ class HunterKiller(object):
                         try:
                             port['instance'] = self.get_instance_by_port(port)
                             port['instance'] = port['instance'] or {}
-                        except:
-                            pass
+                        except Exception as e:
+                            LOG.error(e)
                     self.add_port_to_tree(port, tree)
 
             sys.stdout.write('.')
@@ -512,7 +512,8 @@ class MysqlJsonBridgeEndpoint(object):
         r = self.session.post(self.url, data=payload,
                               verify=False, auth=self.auth)
         self.calls += 1
-        return r.json
+        r.raise_for_status()
+        return r.json()
 
     def first_result(self, result):
         try:
