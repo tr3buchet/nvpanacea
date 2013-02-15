@@ -227,17 +227,21 @@ class HunterKiller(object):
                     # only care about ports with link and fabric status down
                     # get instance and add to tree
                     # NOTE: only link/fabric down ports will be in tree
+                    # in cases where an exception is raised getting an instance
+                    # the port will not be added to the tree
                     try:
                         port['instance'] = self.get_instance_by_port(port)
                         port['instance'] = port['instance'] or {}
+                        self.add_port_to_tree(port, tree)
                     except Exception as e:
                         LOG.error(e)
-                    self.add_port_to_tree(port, tree)
             elif type == 'no_queue_ports':
                 if not port['queue']:
                     # only need instance for ports without a queue
                     # otherwise we can just use the queue (more efficient)
                     # NOTE: all ports will be in the tree for queue repair
+                    # in cases where an exception is raised, the port will not
+                    # have an instance and will be ignored in queue repair
                     try:
                         get_inst = self.get_instance_by_port
                         instance = get_inst(port, join_flavor=True) or {}
@@ -251,6 +255,8 @@ class HunterKiller(object):
                         # only need instance for ports without a queue
                         # otherwise we can just use the queue (more efficient)
                         # NOTE: only ports without vmid will be in the tree
+                        # ports without any kind of instance id will be in the
+                        # but will be ignored by add_vmid
                         try:
                             port['instance'] = self.get_instance_by_port(port)
                             port['instance'] = port['instance'] or {}
