@@ -56,6 +56,15 @@ class HunterKiller(object):
                 # port went away in the mean time
                 pass
 
+    def delete_queue(self, queue):
+        LOG.action('delete queue |%s|', queue)
+        if self.action == 'fix':
+            try:
+                return self.nvp.delete_queue(queue)
+            except aiclib.nvp.ResourceNotFound:
+                # queue went away in the mean time
+                pass
+
 #    def get_group_from_iter(self, iterable, number):
 #        args = [iter(iterable)] * number
 #        return izip_longest(*args)
@@ -232,6 +241,11 @@ class HunterKiller(object):
                     try:
                         port['instance'] = self.get_instance_by_port(port)
                         port['instance'] = port['instance'] or {}
+
+                        #### pass in orphan to add_port_to tree to only use
+                        #### port['instance']
+                        ####
+
                         self.add_port_to_tree(port, tree)
                     except Exception as e:
                         LOG.error(e)
@@ -270,9 +284,10 @@ class HunterKiller(object):
         return tree
 
     def port_manoeuvre(self, type, limit=None):
+        self.start_time = time.time()
+        self.queues_checked = 0
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        self.start_time = time.time()
         nvp_ports = self.nvp.get_ports(relations, limit=limit)
 
         print ('populating tree, check out loglevel INFO if you want to watch,'
@@ -286,6 +301,36 @@ class HunterKiller(object):
         elif type == 'no_vmids':
             self.add_vmids(tree)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+
+    def get_associated_queues(self, nvp_ports):
+        # returns a list of queue uuids found in port associations
+        associated_queues = []
+        for nvp_port in nvp_ports:
+            self.ports_checked += 1
+            nvp_queue = nvp_port['_relations']['LogicalQueueConfig']
+            if nvp_queue and nvp_queue['uuid'] not in associated_queues:
+                associated_queues.append(nvp_queue['uuid'])
+
+        return associated_queues
+
+    def queue_manoeuvre(self, type):
+        self.start_time = time.time()
+        port_relations = ('LogicalQueueConfig', )
+        all_queues = [q['uuid'] for q in self.nvp.get_queues()
+                                if self.get_tag(q, 'qos_pool') is None]
+        self.queues_checked = len(all_queues)
+        nvp_ports = self.nvp.get_ports(port_relations)
+        associated_queues = self.get_associated_queues(nvp_ports)
+        self.fix_orphan_queues(all_queues, associated_queues)
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+
+    def fix_orphan_queues(self, all_queues, associated_queues):
+        orphans = 0
+        for queue in all_queues:
+            if queue not in associated_queues:
+                orphans += 1
+                self.delete_queue(queue)
+        print 'orphans fixed:', orphans
 
     def add_vmids(self, tree):
         no_vmids = 0
@@ -356,10 +401,10 @@ class HunterKiller(object):
         print 'orphans fixed:', orphans
 
     def print_calls_made(self):
-        msg = ('%s ports processed\n%s calls to nvp\n'
+        msg = ('%s ports processed\n%s queues processed\n%s calls to nvp\n'
                '%s calls to melange\n%s calls to nova\n'
                'time taken %s')
-        print msg % (self.ports_checked, self.nvp.calls,
+        print msg % (self.ports_checked, self.queues_checked, self.nvp.calls,
                      self.melange.calls, self.nova.calls, self.time_taken)
 
 
@@ -458,10 +503,45 @@ class NVP(object):
         query = self.connection.lswitch().query()
         return IterableQuery(self, query, limit)
 
+    def switch_update_tag(self, switch, tag_scope, tag_value):
+        nvp_switch = self.get_switch_by_id(switch['uuid'])
+        new_tag = {'scope': tag_scope,
+                   'tag': tag_value}
+
+        # get existing tags, if any, and append vmid tag
+        if 'tags' in nvp_switch:
+            tags = nvp_switch['tags']
+            # update tag if it exists
+            for tag in tags:
+                if tag['scope'] == tag_scope:
+                    LOG.action('changing %s tag %s to %s',
+                               switch['name'], tag, new_tag)
+                    tag['tag'] = tag_value
+                    break
+            else:
+                # didn't find tag with scope
+                # append this tag to existing tags
+                print 'adding tag %s' % new_tag
+                tags.append(new_tag)
+        else:
+            # create net tag list since there are none
+            print 'adding tag %s' % new_tag
+            tags = [new_tag]
+
+        switch_query_obj = self.connection.lswitch(switch['uuid'])
+
+        switch_query_obj.tags(tags)
+        return switch_query_obj.update()
+
     #################### QUEUES ############################################
 
     def get_queues(self, limit=None):
         query = self.connection.qos().query()
+
+        if limit:
+            nvp_page_length = 1000 if limit > 1000 else limit
+            query = query.length(nvp_page_length)
+
         return IterableQuery(self, query, limit)
 
     def create_queue(self, display_name, vmid, max_bandwidth_rate):
@@ -556,7 +636,7 @@ class Nova(MysqlJsonBridgeEndpoint):
                    'on instances.instance_type_id=instance_types.id '
                    'where uuid="%s"')
         else:
-            sql = 'select %s from instances where uuid="%s"'
+            sql = 'select %s from instances where uuid="%s" and deleted=0'
         result = self.run_query(sql % (','.join(select_list), id))
         return self.first_result(result)
 

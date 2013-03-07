@@ -44,7 +44,8 @@ def main():
                         help="fix or fixnoop",
                         default='fixnoop')
     parser.add_argument('-t', '--type', action='store',
-                        help="orphan_ports, no_queue_ports, or add_vmids",
+                        help="orphan_ports, no_queue_ports, add_vmids, "
+                        "orphan_queues",
                         default='no_queue_ports')
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel),
@@ -55,36 +56,14 @@ def main():
 
     print 'iz in yur controller iteratin yur ports (%s)' % args.action
 
-    types = ['orphan_ports', 'no_queue_ports', 'no_vmids']
+    types = ['orphan_ports', 'no_queue_ports', 'no_vmids', 'orphan_queues']
     if args.type not in types:
         raise Exception('type not supported, choose from %s' % types)
-    hk.port_manoeuvre(args.type, args.limit)
+    if 'queues' in args.type:
+        hk.queue_manoeuvre(args.type)
+    else:
+        hk.port_manoeuvre(args.type, args.limit)
     hk.print_calls_made()
-
-#     if args.type == 'orphan':
-#         bad_ports = hk.get_orphaned_ports()
-#         if args.action == 'list':
-#             columns = ('uuid', 'vif_uuid', 'instance_id', 'instance_state',
-#                        'instance_terminated_at', 'link_status',
-#                        'fabric_status')
-#             utils.print_list(bad_ports, columns)
-#             print len(bad_ports), 'orphaned ports found'
-#             print hk.calls_made()
-#         elif args.action in ('fix', 'fixnoop'):
-#             for port in bad_ports:
-#                 hk.delete_port(port, args.action)
-#             print len(bad_ports), 'orphaned ports deleted'
-#             print hk.calls_made()
-#         return
-#     elif args.type == 'no_queue':
-#         bad_ports = hk.no_queue_ports(args.action)
-#         if args.action == 'list':
-#             columns = ('uuid', 'vif_uuid', 'switch_name')
-#             utils.print_list(bad_ports, columns)
-#         print len(bad_ports), 'queueless ports found'
-#         print hk.calls_made()
-#     else:
-#         raise Exception('type specefication not supported')
 
 
 if __name__ == "__main__":
