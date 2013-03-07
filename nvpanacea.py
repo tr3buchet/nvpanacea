@@ -1,6 +1,6 @@
 import argparse
 import logging
-from hunter_killer import HunterKiller
+import hunter_killer
 import utils
 import sys
 
@@ -51,19 +51,18 @@ def main():
     logging.basicConfig(level=getattr(logging, args.loglevel),
                         stream=sys.stdout)
 
-    hk = HunterKiller(action=args.action,
-                      **utils.get_connection_creds(args.environment))
+    hk_machine = {'orphan_ports': hunter_killer.OrphanPorts,
+                  'no_queue_ports': hunter_killer.NoQueuePorts,
+                  'no_vmids': hunter_killer.NoVMIDPorts,
+                  'orphan_queues': hunter_killer.OrphanQueues}
 
-    print 'iz in yur controller iteratin yur ports (%s)' % args.action
+    if args.type not in hk_machine:
+        raise Exception('type not supported, choose in %s' % hk_machine.keys())
 
-    types = ['orphan_ports', 'no_queue_ports', 'no_vmids', 'orphan_queues']
-    if args.type not in types:
-        raise Exception('type not supported, choose from %s' % types)
-    if 'queues' in args.type:
-        hk.queue_manoeuvre(args.type)
-    else:
-        hk.port_manoeuvre(args.type, args.limit)
-    hk.print_calls_made()
+    print 'iz in yur controller iteratin yur business (%s)' % args.action
+    creds = utils.get_connection_creds(args.environment)
+    hk = hk_machine[args.type](action=args.action, **creds)
+    hk.execute(limit=args.limit)
 
 
 if __name__ == "__main__":
