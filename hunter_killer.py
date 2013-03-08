@@ -184,22 +184,6 @@ class OrphanPorts(HunterKillerPortOps):
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(ports=self.ports_checked)
 
-    def is_orphan_port(self, port):
-        # no instance is orphan
-        if not port['instance']:
-            LOG.warn('found port |%s| w/no instance', port['uuid'])
-            return True
-
-        # deleted instance is orphan
-        if port['instance'].get('vm_state') == 'deleted':
-            msg = 'found port |%s| w/instance |%s| in state |%s|'
-            LOG.warn(msg, port['uuid'], port['instance'].get('uuid'),
-                          port['instance']['vm_state'])
-            return True
-
-        # otherwise not an orphan
-        return False
-
     def walk_port_list(self, nvp_ports):
         # walk port list populating port to get the instance
         # if any error is raised getting instance, ignore the port
@@ -230,6 +214,22 @@ class OrphanPorts(HunterKillerPortOps):
 
         print '\norphans fixed:', orphans_fixed
         print '\ndown_down instance status counts:', down_down
+
+    def is_orphan_port(self, port):
+        # no instance is orphan
+        if not port['instance']:
+            LOG.warn('found port |%s| w/no instance', port['uuid'])
+            return True
+
+        # deleted instance is orphan
+        if port['instance'].get('vm_state') == 'deleted':
+            msg = 'found port |%s| w/instance |%s| in state |%s|'
+            LOG.warn(msg, port['uuid'], port['instance'].get('uuid'),
+                          port['instance']['vm_state'])
+            return True
+
+        # otherwise not an orphan
+        return False
 
     def delete_port(self, port):
         LOG.action('delete port |%s|', port['uuid'])
@@ -339,7 +339,6 @@ class NoQueuePorts(HunterKillerPortOps):
             LOG.warn('port |%s| already has a queue!', port['uuid'])
             return
 
-        # ask kevin about the display name
         queue = {'display_name': port['qos_pool']['uuid'],
                  'vmid': port['vmid'] or port['instance']['uuid']}
         try:
@@ -448,6 +447,8 @@ class OrphanQueues(HunterKiller):
 
         # get all the queues from nvp
         port_relations = ('LogicalQueueConfig', )
+
+        # get queue uuids, excepting the qos_pool special queues
         all_queues = [q['uuid'] for q in self.nvp.get_queues()
                                 if get_tag(q, 'qos_pool') is None]
         self.queues_checked = len(all_queues)
@@ -473,6 +474,7 @@ class OrphanQueues(HunterKiller):
             if nvp_queue and nvp_queue['uuid'] not in associated_queues:
                 associated_queues.append(nvp_queue['uuid'])
 
+        print
         return associated_queues
 
     def fix(self, all_queues, associated_queues):
