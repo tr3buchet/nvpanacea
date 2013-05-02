@@ -44,15 +44,14 @@ def main():
                         help="fix or fixnoop",
                         default='fixnoop')
     parser.add_argument('-t', '--type', action='store',
-                        help="orphan_ports, no_queue_ports, add_vmids, "
-                        "orphan_queues",
-                        default='no_queue_ports')
+                        help="orphan_ports, repair_queues, add_vmids, "
+                        "orphan_queues")
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel),
                         stream=sys.stdout)
 
     hk_machine = {'orphan_ports': hunter_killer.OrphanPorts,
-                  'no_queue_ports': hunter_killer.NoQueuePorts,
+                  'repair_queues': hunter_killer.RepairQueues,
                   'no_vmids': hunter_killer.NoVMIDPorts,
                   'orphan_queues': hunter_killer.OrphanQueues}
 

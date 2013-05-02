@@ -36,25 +36,8 @@ class NVP(object):
 
     @classmethod
     def object_new_tags(cls, obj, tag_scope, tag_value):
-        new_tag = {'scope': tag_scope,
-                   'tag': tag_value}
-
-        # get existing tags, if any, and append vmid tag
-        if 'tags' in obj:
-            tags = obj['tags']
-            # update tag if it exists
-            for tag in tags:
-                if tag['scope'] == tag_scope:
-                    tag['tag'] = tag_value
-                    break
-            else:
-                # didn't find tag with scope
-                # append this tag to existing tags
-                tags.append(new_tag)
-        else:
-            # create net tag list since there are none
-            tags = [new_tag]
-
+        tags = obj.get('tags', {})
+        tags['tag_scope'] == tag_value
         return tags
 
     #################### PORTS ################################################
@@ -104,7 +87,7 @@ class NVP(object):
 
         port_query_obj = self.connection.lswitch_port(port['switch']['uuid'],
                                                       port['uuid'])
-        port_query_obj.tags(tags)
+        port_query_obj.tags(aiclib.h.tags(tags))
         return port_query_obj.update()
 
     #################### SWITCHES #############################################
@@ -124,7 +107,7 @@ class NVP(object):
         tags = self.object_new_tags(nvp_switch, tag_scope, tag_value)
 
         switch_query_obj = self.connection.lswitch(switch['uuid'])
-        switch_query_obj.tags(tags)
+        switch_query_obj.tags(aiclib.h.tags(tags))
 
         return switch_query_obj.update()
 
@@ -143,14 +126,19 @@ class NVP(object):
         self.calls += 1
         queue = self.connection.qos()
         queue.display_name(display_name)
-        queue.tags({'scope': 'vmid',
-                    'tag': vmid})
+        queue.tags(aiclib.h.tags({'vmid': vmid}))
         queue.maxbw_rate(max_bandwidth_rate)
         return queue.create()
 
     def delete_queue(self, id):
         self.calls += 1
         self.connection.qos(id).delete()
+
+    def update_queue_maxbw_rate(self, queue, max_bandwidth_rate):
+        self.calls += 1
+        queue = self.connection.qos(queue['uuid'])
+        queue.maxbw_rate(max_bandwidth_rate)
+        return queue.update()
 
     #################### QOS POOLS ############################################
     # a qos pool is actually a queue but these 2 are special

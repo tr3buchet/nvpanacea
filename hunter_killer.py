@@ -6,6 +6,10 @@ from datetime import timedelta
 import aiclib
 import querylib
 
+from gevent.pool import Pool
+import gevent.monkey
+
+gevent.monkey.patch_all()
 
 LOG = logging.getLogger(__name__)
 LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
@@ -13,13 +17,6 @@ LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
-
-
-def get_tag(obj, tag_name):
-    if 'tags' in obj:
-        for tag in obj['tags']:
-            if tag['scope'] == tag_name:
-                return tag['tag']
 
 
 class HunterKiller(object):
@@ -72,8 +69,7 @@ class HunterKillerPortOps(HunterKiller):
 
     def is_isolated_switch(self, switch):
         # if switch  has a qos pool, it is not isolated
-        qos_pool_id = get_tag(switch, 'qos_pool')
-        return False if qos_pool_id else True
+        return not 'qos_pool' in switch['tags']
 
     def is_public_switch(self, switch):
         if switch:
@@ -90,7 +86,7 @@ class HunterKillerPortOps(HunterKiller):
             return zone_name == 'private'
 
     def get_qos_pool_from_switch(self, switch):
-        qos_pool_id = get_tag(switch, 'qos_pool')
+        qos_pool_id = switch['tags'].get('qos_pool')
         if qos_pool_id:
             return self.nvp.get_qos_pool_by_id(qos_pool_id)
 
@@ -127,9 +123,12 @@ class HunterKillerPortOps(HunterKiller):
         queue = {}
         nvp_queue = nvp_port['_relations'].get('LogicalQueueConfig')
         if nvp_queue:
+            tags = aiclib.h.tags(nvp_queue)
             queue = {'uuid': nvp_queue['uuid'],
                      'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
-                     'vmid': get_tag(nvp_queue, 'vmid') or ''}
+                     'vmid': tags.get('vmid'),
+                     'tags': tags,
+                     'ignored': 'ignored_nvpanacea' in tags}
 
         status = {}
         nvp_status = nvp_port['_relations'].get('LogicalPortStatus')
@@ -142,9 +141,10 @@ class HunterKillerPortOps(HunterKiller):
         qos_pool = {}
         nvp_switch = nvp_port['_relations'].get('LogicalSwitchConfig')
         if nvp_switch:
+            tags = aiclib.h.tags(nvp_switch)
             switch = {'uuid': status.get('lswitch_uuid'),
                       'name': nvp_switch['display_name'],
-                      'tags': nvp_switch['tags'],
+                      'tags': tags,
                       'transport_zone_uuid': \
                           nvp_switch['transport_zones'][0]['zone_uuid']}
             qos_pool = self.get_qos_pool(switch) or {}
@@ -152,8 +152,9 @@ class HunterKillerPortOps(HunterKiller):
                         'max_bandwidth_rate':
                             qos_pool.get('max_bandwidth_rate')}
 
+        tags = aiclib.h.tags(nvp_port)
         port = {'uuid': nvp_port.get('uuid', ''),
-                'tags': nvp_port.get('tags', []),
+                'tags': tags,
                 'switch': switch,
                 'qos_pool': qos_pool,
                 'queue': queue,
@@ -163,13 +164,14 @@ class HunterKillerPortOps(HunterKiller):
                 'isolated': self.is_isolated_switch(switch),
                 'public': self.is_public_switch(switch),
                 'snet': self.is_snet_switch(switch),
-                'vmid': get_tag(nvp_port, 'vm_id'),
+                'vmid': tags.get('vm_id'),
                 'instance': {}}
 
         return port
 
 
 class OrphanPorts(HunterKillerPortOps):
+    """ deletes orphan ports as they are found """
     def execute(self, limit=None):
         self.ports_checked = 0
         self.start_time = time.time()
@@ -241,7 +243,14 @@ class OrphanPorts(HunterKillerPortOps):
                 pass
 
 
-class NoQueuePorts(HunterKillerPortOps):
+class RepairQueues(HunterKillerPortOps):
+    """ creates a tree port/queue information and repairs queues.
+
+        can do one of these things:
+        1) create a queue and associate port(s) with it
+        2) associate a port to an existing queue
+        3) update the max_bandwidth_rate on a port's queue
+    """
     def execute(self, **kwargs):
         self.ports_checked = 0
         self.start_time = time.time()
@@ -259,29 +268,37 @@ class NoQueuePorts(HunterKillerPortOps):
 
     def populate_tree(self, nvp_ports):
         tree = {}
+        ports = []
         for nvp_port in nvp_ports:
             self.ports_checked += 1
-            sys.stdout.write('.')
-            sys.stdout.flush()
             port = self.create_port_dict(nvp_port)
+            ports.append(port)
 
-            if not port['queue']:
-                # creating a queue requires instance and flavor, so
-                # only need instance for ports with no queue
-                # otherwise we can get vmid queue (more efficient)
-                # NOTE: all ports will be in the tree for queue repair
-                # in cases where an exception is raised, the port will not
-                # have an instance and will be ignored in queue repair
-                try:
-                    get_inst = self.get_instance_by_port
-                    port['instance'] = get_inst(port, join_flavor=True) or {}
-                except Exception as e:
-                    LOG.error(e)
-                    continue
-            self.add_port_to_tree(port, tree)
+            # repairing a queue requires instance and flavor, so
+            # we need all instances
+            # otherwise we could get vmid queue (more efficient)
+            # NOTE: all ports will be in the tree for queue repair
+            # in cases where an exception is raised, the port will not
+            # have an instance and will be ignored in queue repair
+
+        pool = Pool(10)
+        pool.map(self.populate_instance, ports)
+
+        for port in ports:
+            if port.get('instance'):
+                self.add_port_to_tree(port, tree)
 
         print
         return tree
+
+    def populate_instance(self, port):
+        try:
+            get_inst = self.get_instance_by_port
+            port['instance'] = get_inst(port, join_flavor=True) or {}
+        except Exception as e:
+            LOG.error(e)
+        sys.stdout.write('.')
+        sys.stdout.flush()
 
     def add_port_to_tree(self, port, tree):
         if port['vmid']:
@@ -300,38 +317,72 @@ class NoQueuePorts(HunterKillerPortOps):
             tree[instance_id] = [port]
 
     def fix(self, tree):
-        no_queues = 0
+        queues_repaired = 0
+        no_queues_fixed = 0
         for instance_id, ports in tree.iteritems():
             for port in ports:
                 if port['queue']:
-                    continue
-                no_queues += 1
+                    # port has queue, make sure it's squared away
+                    if self.ensure_port_queue_bw(port):
+                        queues_repaired += 1
+                else:
+                    # port had no queue, make or associate with one
+                    self.repair_port_queue(tree, instance_id, port)
+                    no_queues_fixed += 1
+        print 'queues repaired:', queues_repaired
+        print 'no_queues fixed:', no_queues_fixed
 
-                if port['public']:
-                    msg = 'creating queue for public port |%s|'
-                    LOG.action(msg, port['uuid'])
-                    queue = self.create_queue(port)
-                    self.associate_queue(port, queue)
-                elif port['snet'] or port['isolated']:
-                    # these ports need to share a queue
-                    # other ports will be snet or isolated nw w/ queue
-                    other_ports = [p for p in tree[instance_id]
-                                   if p['queue'] and
-                                      (p['snet'] or p['isolated'])]
-                    if other_ports:
-                        # found port(s) with a queue to share
-                        msg = ('associating queue for snet/isolated port |%s| '
-                               'with snet/isolated port |%s| queue')
-                        other_port = other_ports[0]
-                        LOG.action(msg, port['uuid'], other_port['uuid'])
-                        self.associate_queue(port, other_port['queue'])
-                    else:
-                        # no ports had queue to share, create one and associate
-                        msg = 'creating queue for snet/isolated port |%s|'
-                        LOG.action(msg, port['uuid'])
-                        queue = self.create_queue(port)
-                        self.associate_queue(port, queue)
-        print 'queues fixed:', no_queues
+    def repair_port_queue(self, tree, instance_id, port):
+        if port['public']:
+            msg = 'creating queue for public port |%s|'
+            LOG.action(msg, port['uuid'])
+            queue = self.create_queue(port)
+            self.associate_queue(port, queue)
+        elif port['snet'] or port['isolated']:
+            # these ports need to share a queue
+            # other ports will be snet or isolated nw w/ queue
+            other_ports = [p for p in tree[instance_id]
+                           if p['queue'] and
+                              (p['snet'] or p['isolated'])]
+            if other_ports:
+                # found port(s) with a queue to share
+                msg = ('associating queue for snet/isolated port '
+                       '|%s| with snet/isolated port |%s| queue')
+                other_port = other_ports[0]
+                LOG.action(msg, port['uuid'], other_port['uuid'])
+                self.associate_queue(port, other_port['queue'])
+            else:
+                # no ports had queue to share, create and associate
+                msg = 'creating queue for snet/isolated port |%s|'
+                LOG.action(msg, port['uuid'])
+                queue = self.create_queue(port)
+                self.associate_queue(port, queue)
+
+    def ensure_port_queue_bw(self, port):
+        # returns True if action was taken
+        if port['queue']['ignored']:
+            return False
+        # see if queue max_bw_rate is squared away
+        queue = port['queue']
+        mbwr = queue['max_bandwidth_rate']
+        calc_mbwr = self.calculate_max_bandwidth_rate(port)
+        if mbwr == calc_mbwr:
+            return False
+        else:
+            # it isn't, go ahead and square that away
+            self.update_queue_max_bandwidth_rate(queue, calc_mbwr)
+            return True
+
+    def calculate_max_bandwidth_rate(self, port):
+        try:
+            rxtx_factor = port['instance'].get('rxtx_factor')
+            rxtx_base = port['qos_pool'].get('max_bandwidth_rate')
+            max_bandwidth_rate = int(rxtx_base) * int(rxtx_factor)
+        except (ValueError, TypeError):
+            LOG.error('rxtx_cap calculation failed. base: |%s|, factor: |%s|',
+                      port['rxtx_base'], port['rxtx_factor'])
+            return None
+        return max_bandwidth_rate
 
     def create_queue(self, port):
         LOG.action('create queue for port |%s|', port['uuid'])
@@ -341,14 +392,11 @@ class NoQueuePorts(HunterKillerPortOps):
 
         queue = {'display_name': port['qos_pool']['uuid'],
                  'vmid': port['vmid'] or port['instance']['uuid']}
-        try:
-            rxtx_factor = port['instance'].get('rxtx_factor')
-            rxtx_base = port['qos_pool'].get('max_bandwidth_rate')
-            queue['max_bandwidth_rate'] = int(rxtx_base) * int(rxtx_factor)
-        except (ValueError, TypeError):
-            LOG.error('rxtx_cap calculation failed. base: |%s|, factor: |%s|',
-                      port['rxtx_base'], port['rxtx_factor'])
+
+        max_bandwidth_rate = self.calculate_max_bandwidth_rate(port)
+        if max_bandwidth_rate is None:
             return
+        queue['max_bandwidth_rate'] = max_bandwidth_rate
 
         LOG.action('creating queue: |%s|', queue)
         if self.action == 'fix':
@@ -356,7 +404,7 @@ class NoQueuePorts(HunterKillerPortOps):
             if nvp_queue:
                 return {'uuid': nvp_queue['uuid'],
                         'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
-                        'vmid': get_tag(nvp_queue, 'vmid') or ''}
+                        'vmid': aiclib.h.tags(nvp_queue).get('vmid')}
             else:
                 LOG.error('queue creation failed for port |%s|', port['uuid'])
         else:
@@ -379,8 +427,25 @@ class NoQueuePorts(HunterKillerPortOps):
             # behavior to what happens in fix mode
             port['queue'] = queue
 
+    def update_queue_max_bandwidth_rate(self, queue, max_bandwidth_rate):
+        msg = 'update max_bandwidth_rate for queue |%s| from |%s| to |%s|'
+        LOG.action(msg, queue['uuid'], queue['max_bandwidth_rate'],
+                                       max_bandwidth_rate)
+
+        if self.action == 'fix':
+            try:
+                self.nvp.update_queue_maxbw_rate(queue, max_bandwidth_rate)
+            except aiclib.nvp.ResourceNotFound:
+                LOG.error('queue |%s| was not updated', queue['uuid'])
+                return queue
+
+        # update queue data structure
+        queue['max_bandwidth_rate'] = max_bandwidth_rate
+        return queue
+
 
 class NoVMIDPorts(HunterKillerPortOps):
+    """ adds the vm_id tag to ports which do not have it """
     def execute(self, limit=None):
         self.ports_checked = 0
         self.start_time = time.time()
@@ -406,7 +471,7 @@ class NoVMIDPorts(HunterKillerPortOps):
             sys.stdout.write('.')
             sys.stdout.flush()
 
-            if get_tag(port, 'vm_id') is None:
+            if port['tags'].get('vm_id') is None:
                 LOG.warn('port |%s| has no vm_id tag', port['uuid'])
 
                 # attempt to get vmid from queue
@@ -425,7 +490,7 @@ class NoVMIDPorts(HunterKillerPortOps):
                 except Exception as e:
                     LOG.error(e)
 
-        print '\nvmids fixed:', vmids_fixed
+        print '\nvm_ids fixed:', vmids_fixed
 
     def port_add_vmid(self, port, vmid):
         LOG.action('adding vm_id tag |%s| to port |%s|', vmid, port['uuid'])
@@ -438,6 +503,9 @@ class NoVMIDPorts(HunterKillerPortOps):
 
 
 class OrphanQueues(HunterKiller):
+    """ compares the list of all queues with the list of queues found to be
+        associated with ports. deletes queues which are not associated
+    """
     def execute(self, **kwargs):
         self.ports_checked = 0
         self.start_time = time.time()
@@ -450,7 +518,7 @@ class OrphanQueues(HunterKiller):
 
         # get queue uuids, excepting the qos_pool special queues
         all_queues = [q['uuid'] for q in self.nvp.get_queues()
-                                if get_tag(q, 'qos_pool') is None]
+                                if aiclib.h.tags(q).get('qos_pool') is None]
         self.queues_checked = len(all_queues)
 
         # get all the ports from nvp and then find their queues
