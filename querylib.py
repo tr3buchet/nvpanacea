@@ -2,6 +2,7 @@ import logging
 
 import requests
 from requests.auth import HTTPBasicAuth
+requests.adapters.DEFAULT_RETRIES = 5
 
 import aiclib
 from utils import IterableQuery

@@ -192,9 +192,6 @@ class OrphanPorts(HunterKillerPortOps):
         down_down = {}
         for nvp_port in nvp_ports:
             port = self.create_port_dict(nvp_port)
-            if not port:
-                # ignore malformed port
-                continue
             self.ports_checked += 1
             sys.stdout.write('.')
             sys.stdout.flush()
@@ -273,9 +270,7 @@ class RepairQueues(HunterKillerPortOps):
         for nvp_port in nvp_ports:
             self.ports_checked += 1
             port = self.create_port_dict(nvp_port)
-            if port:
-                # ignore malformed port
-                ports.append(port)
+            ports.append(port)
 
             # repairing a queue requires instance and flavor, so
             # we need all instances
@@ -295,11 +290,8 @@ class RepairQueues(HunterKillerPortOps):
         return tree
 
     def populate_instance(self, port):
-        try:
-            get_inst = self.get_instance_by_port
-            port['instance'] = get_inst(port, join_flavor=True) or {}
-        except Exception as e:
-            LOG.error(e)
+        get_inst = self.get_instance_by_port
+        port['instance'] = get_inst(port, join_flavor=True) or {}
         sys.stdout.write('.')
         sys.stdout.flush()
 
@@ -470,9 +462,6 @@ class NoVMIDPorts(HunterKillerPortOps):
         vmids_fixed = 0
         for nvp_port in nvp_ports:
             port = self.create_port_dict(nvp_port)
-            if not port:
-                # ignore malformed port
-                continue
             self.ports_checked += 1
             sys.stdout.write('.')
             sys.stdout.flush()
