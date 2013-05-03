@@ -51,7 +51,7 @@ def get_connection_creds(environment):
            'values with supernova keyring if you intend to use them')
 
     # get nvp creds
-    nvp_url = config.get(environment, 'nvp_url')
+    nvp_url = resolve_url(config.get(environment, 'nvp_url'))
     nvp_user = check_keyring(config.get(environment, 'nvp_user'))
     nvp_pass = check_keyring(config.get(environment, 'nvp_pass'))
     if not (nvp_url and nvp_user and nvp_pass):
