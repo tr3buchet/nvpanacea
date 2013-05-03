@@ -127,10 +127,6 @@ class HunterKillerPortOps(HunterKiller):
                      'vmid': tags.get('vmid'),
                      'tags': tags,
                      'ignored': 'ignored_nvpanacea' in tags}
-            if queue['max_bandwidth_rate'] is None and not queue['ignored']:
-                msg = 'nvp queue |%s|, no max_bandwidth_rate!!'
-                LOG.error(msg, nvp_queue['uuid'])
-
 
         status = {}
         nvp_status = nvp_port['_relations'].get('LogicalPortStatus')
