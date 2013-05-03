@@ -7,9 +7,7 @@ import aiclib
 import querylib
 
 from gevent.pool import Pool
-import gevent.monkey
 
-gevent.monkey.patch_all()
 
 LOG = logging.getLogger(__name__)
 LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)

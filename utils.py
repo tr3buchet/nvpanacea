@@ -1,11 +1,12 @@
-import aiclib
 import ConfigParser
 import keyring
 import logging
 import os
 import prettytable
 import re
+import socket
 
+import aiclib
 
 LOG = logging.getLogger(__name__)
 
@@ -36,6 +37,14 @@ def check_keyring(value):
     return value
 
 
+def resolve_url(url):
+    parts = url.split('/')
+    host = parts[2]
+    address = socket.gethostbyname(host)
+    parts[2] = address
+    return '/'.join(parts)
+
+
 def get_connection_creds(environment):
     config = get_config_from_file()
     msg = ('%s creds not specified. Make sure to set USE_KEYRING specified '
@@ -49,14 +58,14 @@ def get_connection_creds(environment):
         raise Exception(msg % 'nvp')
 
     # get melange mysqljsonbridge connection creds
-    melange_url = config.get(environment, 'melange_bridge_url')
+    melange_url = resolve_url(config.get(environment, 'melange_bridge_url'))
     melange_user = check_keyring(config.get(environment, 'melange_user'))
     melange_pass = check_keyring(config.get(environment, 'melange_pass'))
     if not (melange_url and melange_user and melange_pass):
         raise Exception(msg % 'melange')
 
     # get nova mysqljsonbridge connection creds
-    nova_url = config.get(environment, 'nova_bridge_url')
+    nova_url = resolve_url(config.get(environment, 'nova_bridge_url'))
     nova_user = check_keyring(config.get(environment, 'nova_user'))
     nova_pass = check_keyring(config.get(environment, 'nova_pass'))
     if not (nova_url and nova_user and nova_pass):

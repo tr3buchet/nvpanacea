@@ -1,8 +1,12 @@
+import gevent.monkey
+gevent.monkey.patch_all(dns=False)
+
 import argparse
 import logging
-import hunter_killer
 import utils
 import sys
+
+import hunter_killer
 
 
 LOG = logging.getLogger(__name__)
@@ -58,8 +62,12 @@ def main():
     if args.type not in hk_machine:
         raise Exception('type not supported, choose in %s' % hk_machine.keys())
 
-    print 'iz in yur controller iteratin yur business (%s)' % args.action
     creds = utils.get_connection_creds(args.environment)
+    print 'environment: %s' % args.environment
+    print 'nvp url: %s' % creds['nvp_url']
+    print 'nova mysqljson bridge: %s' % creds['nova_url']
+    print 'melange mysqljson bridge: %s' % creds['melange_url']
+    print 'iz in yur controller iteratin yur business (%s)' % args.action
     hk = hk_machine[args.type](action=args.action, **creds)
     hk.execute(limit=args.limit)
 
