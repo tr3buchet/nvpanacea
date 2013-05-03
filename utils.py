@@ -42,7 +42,7 @@ def resolve_url(url):
     host = parts[2]
     address = socket.gethostbyname(host)
     parts[2] = address
-    return '/'.join(parts)
+    return {'url': url, 'resolved_url': '/'.join(parts), 'address': address}
 
 
 def get_connection_creds(environment):
@@ -50,12 +50,15 @@ def get_connection_creds(environment):
     msg = ('%s creds not specified. Make sure to set USE_KEYRING specified '
            'values with supernova keyring if you intend to use them')
 
+    print 'environment: %s' % environment
+
     # get nvp creds
     nvp_url = resolve_url(config.get(environment, 'nvp_url'))
     nvp_user = check_keyring(config.get(environment, 'nvp_user'))
     nvp_pass = check_keyring(config.get(environment, 'nvp_pass'))
     if not (nvp_url and nvp_user and nvp_pass):
         raise Exception(msg % 'nvp')
+    print 'nvp url: %s (%s)' % (nvp_url['url'], nvp_url['address'])
 
     # get melange mysqljsonbridge connection creds
     melange_url = resolve_url(config.get(environment, 'melange_bridge_url'))
@@ -63,6 +66,8 @@ def get_connection_creds(environment):
     melange_pass = check_keyring(config.get(environment, 'melange_pass'))
     if not (melange_url and melange_user and melange_pass):
         raise Exception(msg % 'melange')
+    print 'melange mysqljson bridge: %s (%s)' % (melange_url['url'],
+                                                 melange_url['address'])
 
     # get nova mysqljsonbridge connection creds
     nova_url = resolve_url(config.get(environment, 'nova_bridge_url'))
@@ -70,14 +75,16 @@ def get_connection_creds(environment):
     nova_pass = check_keyring(config.get(environment, 'nova_pass'))
     if not (nova_url and nova_user and nova_pass):
         raise Exception(msg % 'nova')
+    print 'nova mysqljson bridge: %s (%s)' % (nova_url['url'],
+                                              nova_url['address'])
 
-    return {'nvp_url': nvp_url,
+    return {'nvp_url': nvp_url['resolved_url'],
             'nvp_username': nvp_user,
             'nvp_password': nvp_pass,
-            'melange_url': melange_url,
+            'melange_url': melange_url['resolved_url'],
             'melange_username': melange_user,
             'melange_password': melange_pass,
-            'nova_url': nova_url,
+            'nova_url': nova_url['resolved_url'],
             'nova_username': nova_user,
             'nova_password': nova_pass}
 

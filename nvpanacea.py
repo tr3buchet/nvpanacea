@@ -63,11 +63,8 @@ def main():
         raise Exception('type not supported, choose in %s' % hk_machine.keys())
 
     creds = utils.get_connection_creds(args.environment)
-    print 'environment: %s' % args.environment
-    print 'nvp url: %s' % creds['nvp_url']
-    print 'nova mysqljson bridge: %s' % creds['nova_url']
-    print 'melange mysqljson bridge: %s' % creds['melange_url']
     print 'iz in yur controller iteratin yur business (%s)' % args.action
+    sys.stdout.flush()
     hk = hk_machine[args.type](action=args.action, **creds)
     hk.execute(limit=args.limit)
 
