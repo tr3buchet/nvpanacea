@@ -124,8 +124,13 @@ class HunterKillerPortOps(HunterKiller):
         nvp_queue = nvp_port['_relations'].get('LogicalQueueConfig')
         if nvp_queue:
             tags = aiclib.h.tags(nvp_queue)
+            max_bwr = nvp_queue.get('max_bandwidth_rate')
+            if max_bwr is None:
+                msg = 'nvp queue |%s|, no max_bandwidth_rate!!, ignoring port'
+                LOG.error(msg, nvp_queue['uuid'])
+                return {}
             queue = {'uuid': nvp_queue['uuid'],
-                     'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
+                     'max_bandwidth_rate': max_bwr,
                      'vmid': tags.get('vmid'),
                      'tags': tags,
                      'ignored': 'ignored_nvpanacea' in tags}
@@ -194,6 +199,9 @@ class OrphanPorts(HunterKillerPortOps):
         down_down = {}
         for nvp_port in nvp_ports:
             port = self.create_port_dict(nvp_port)
+            if not port:
+                # ignore malformed port
+                continue
             self.ports_checked += 1
             sys.stdout.write('.')
             sys.stdout.flush()
@@ -272,7 +280,9 @@ class RepairQueues(HunterKillerPortOps):
         for nvp_port in nvp_ports:
             self.ports_checked += 1
             port = self.create_port_dict(nvp_port)
-            ports.append(port)
+            if port:
+                # ignore malformed port
+                ports.append(port)
 
             # repairing a queue requires instance and flavor, so
             # we need all instances
@@ -467,6 +477,9 @@ class NoVMIDPorts(HunterKillerPortOps):
         vmids_fixed = 0
         for nvp_port in nvp_ports:
             port = self.create_port_dict(nvp_port)
+            if not port:
+                # ignore malformed port
+                continue
             self.ports_checked += 1
             sys.stdout.write('.')
             sys.stdout.flush()
