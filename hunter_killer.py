@@ -122,16 +122,15 @@ class HunterKillerPortOps(HunterKiller):
         nvp_queue = nvp_port['_relations'].get('LogicalQueueConfig')
         if nvp_queue:
             tags = aiclib.h.tags(nvp_queue)
-            max_bwr = nvp_queue.get('max_bandwidth_rate')
-            if max_bwr is None:
-                msg = 'nvp queue |%s|, no max_bandwidth_rate!!, ignoring port'
-                LOG.error(msg, nvp_queue['uuid'])
-                return {}
             queue = {'uuid': nvp_queue['uuid'],
-                     'max_bandwidth_rate': max_bwr,
+                     'max_bandwidth_rate': nvp_queue.get('max_bandwidth_rate'),
                      'vmid': tags.get('vmid'),
                      'tags': tags,
                      'ignored': 'ignored_nvpanacea' in tags}
+            if queue['max_bandwidth_rate'] is None and not queue['ignored']:
+                msg = 'nvp queue |%s|, no max_bandwidth_rate!!'
+                LOG.error(msg, nvp_queue['uuid'])
+
 
         status = {}
         nvp_status = nvp_port['_relations'].get('LogicalPortStatus')
@@ -388,7 +387,7 @@ class RepairQueues(HunterKillerPortOps):
             max_bandwidth_rate = int(rxtx_base) * int(rxtx_factor)
         except (ValueError, TypeError):
             LOG.error('rxtx_cap calculation failed. base: |%s|, factor: |%s|',
-                      port['rxtx_base'], port['rxtx_factor'])
+                      rxtx_base, rxtx_factor)
             return None
         return max_bandwidth_rate
 
