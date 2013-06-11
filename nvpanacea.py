@@ -49,7 +49,7 @@ def main():
                         default='fixnoop')
     parser.add_argument('-t', '--type', action='store',
                         help="orphan_ports, repair_queues, add_vmids, "
-                        "orphan_queues")
+                        "orphan_queues, orphan_interfaces, migrate_quark")
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel),
                         stream=sys.stdout)
@@ -57,7 +57,9 @@ def main():
     hk_machine = {'orphan_ports': hunter_killer.OrphanPorts,
                   'repair_queues': hunter_killer.RepairQueues,
                   'no_vmids': hunter_killer.NoVMIDPorts,
-                  'orphan_queues': hunter_killer.OrphanQueues}
+                  'orphan_queues': hunter_killer.OrphanQueues,
+                  'orphan_interfaces': hunter_killer.OrphanInterfaces,
+                  'migrate_quark': hunter_killer.MigrateQuark}
 
     if args.type not in hk_machine:
         raise Exception('type not supported, choose in %s' % hk_machine.keys())

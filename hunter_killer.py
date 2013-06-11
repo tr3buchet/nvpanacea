@@ -2,11 +2,13 @@ import logging
 import sys
 import time
 from datetime import timedelta
+from netaddr import EUI
 
 import aiclib
 import querylib
 
-from gevent.pool import Pool
+#from gevent.pool import Pool
+#from gevent.coros import Semaphore
 
 
 LOG = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ class HunterKiller(object):
         self.nvp = querylib.NVP(nvp_url, nvp_username, nvp_password)
         self.nova = querylib.Nova(nova_url, nova_username, nova_password)
         self.melange = querylib.Melange(melange_url, melange_username,
-                                                  melange_password)
+                                        melange_password)
 
     def execute(self, *args, **kwargs):
         raise NotImplementedError()
@@ -45,25 +47,26 @@ class HunterKiller(object):
 
 
 class HunterKillerPortOps(HunterKiller):
-    def get_instance_by_port(self, port, join_flavor=False):
+    def get_instance_by_port(self, port, instances, interfaces):
         instance_id = port['vmid']
 
         # vmid tag wasn't on port, check the queue
         if not instance_id:
             instance_id = port['queue'].get('vmid')
 
-        # get instance_id from melange if we don't already have it
+        # get instance_id from melange interfaces if we don't already have it
         if not instance_id:
-            interface = self.melange.get_interface_by_id(port['vif_uuid']) \
-                        if port['vif_uuid'] else None
-            # if we got an interface back, grab it's device_id
+            interface = interfaces.get(port['vif_uuid']) \
+                if port['vif_uuid'] else None
+            # if we found an interface, grab it's device_id
             if interface:
                 instance_id = interface['device_id']
 
-        # if we ended up with an instance_id, attempt to get instance
+        # if we ended up with an instance_id, see if we have an instance
+        # and return it
         if instance_id:
-            return self.nova.get_instance_by_id(instance_id,
-                                                join_flavor)
+            return instances.get(instance_id) or {}
+        return {}
 
     def is_isolated_switch(self, switch):
         # if switch  has a qos pool, it is not isolated
@@ -143,12 +146,12 @@ class HunterKillerPortOps(HunterKiller):
             switch = {'uuid': status.get('lswitch_uuid'),
                       'name': nvp_switch['display_name'],
                       'tags': tags,
-                      'transport_zone_uuid': \
-                          nvp_switch['transport_zones'][0]['zone_uuid']}
+                      'transport_zone_uuid':
+                      nvp_switch['transport_zones'][0]['zone_uuid']}
             qos_pool = self.get_qos_pool(switch) or {}
             qos_pool = {'uuid': qos_pool.get('uuid'),
                         'max_bandwidth_rate':
-                            qos_pool.get('max_bandwidth_rate')}
+                        qos_pool.get('max_bandwidth_rate')}
 
         tags = aiclib.h.tags(nvp_port)
         port = {'uuid': nvp_port.get('uuid', ''),
@@ -175,16 +178,21 @@ class OrphanPorts(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports(relations, limit=limit)
+        nvp_ports = [p for p in self.nvp.get_ports(relations, limit=limit)]
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made(ports=self.ports_checked)
+        return
+        instances = self.nova.get_instances_hashed_by_id()
+        interfaces = self.melange.get_interfaces_hashed_by_id()
 
         print ('Walking ports to find orphans, '
                'check out loglevel INFO if you want to watch. a . is a port')
 
-        self.walk_port_list(nvp_ports)
+        self.walk_port_list(nvp_ports, instances, interfaces)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(ports=self.ports_checked)
 
-    def walk_port_list(self, nvp_ports):
+    def walk_port_list(self, nvp_ports, instances, interfaces):
         # walk port list populating port to get the instance
         # if any error is raised getting instance, ignore the port
         # if port is deemed orphan, fix it
@@ -198,8 +206,9 @@ class OrphanPorts(HunterKillerPortOps):
 
             if not (port['link_status_up'] or port['fabric_status_up']):
                 try:
-                    port['instance'] = self.get_instance_by_port(port)
-                    port['instance'] = port['instance'] or {}
+                    port['instance'] = self.get_instance_by_port(port,
+                                                                 instances,
+                                                                 interfaces)
                     if port['instance'].get('vm_state') in down_down:
                         down_down[port['instance'].get('vm_state')] += 1
                     else:
@@ -225,7 +234,7 @@ class OrphanPorts(HunterKillerPortOps):
         if port['instance'].get('vm_state') == 'deleted':
             msg = 'found port |%s| w/instance |%s| in state |%s|'
             LOG.warn(msg, port['uuid'], port['instance'].get('uuid'),
-                          port['instance']['vm_state'])
+                     port['instance']['vm_state'])
             return True
 
         # otherwise not an orphan
@@ -254,46 +263,37 @@ class RepairQueues(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports(relations)
+        nvp_ports = [p for p in self.nvp.get_ports(relations)]
+        instances = self.nova.get_instances_hashed_by_id(join_flavor=True)
+        interfaces = self.melange.get_interfaces_hashed_by_id()
 
         print ('populating tree, check out loglevel INFO if you want to watch,'
-              ' a . is a port')
+               ' a . is a port')
 
-        tree = self.populate_tree(nvp_ports)
+        tree = self.populate_tree(nvp_ports, instances, interfaces)
         self.fix(tree)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(ports=self.ports_checked)
 
-    def populate_tree(self, nvp_ports):
+    def populate_tree(self, nvp_ports, instances, interfaces):
         tree = {}
-        ports = []
         for nvp_port in nvp_ports:
             self.ports_checked += 1
             port = self.create_port_dict(nvp_port)
-            ports.append(port)
 
             # repairing a queue requires instance and flavor, so
             # we need all instances
             # otherwise we could get vmid queue (more efficient)
-            # NOTE: all ports will be in the tree for queue repair
+            # NOTE: all good ports will be in the tree for queue repair
             # in cases where an exception is raised, the port will not
             # have an instance and will be ignored in queue repair
-
-        pool = Pool(10)
-        pool.map(self.populate_instance, ports)
-
-        for port in ports:
-            if port.get('instance'):
+            port['instance'] = self.get_instance_by_port(port, instances,
+                                                         interfaces)
+            # ignore the orphans
+            if port['instance']:
                 self.add_port_to_tree(port, tree)
 
-        print
         return tree
-
-    def populate_instance(self, port):
-        get_inst = self.get_instance_by_port
-        port['instance'] = get_inst(port, join_flavor=True) or {}
-        sys.stdout.write('.')
-        sys.stdout.flush()
 
     def add_port_to_tree(self, port, tree):
         if port['vmid']:
@@ -338,7 +338,7 @@ class RepairQueues(HunterKillerPortOps):
             # other ports will be snet or isolated nw w/ queue
             other_ports = [p for p in tree[instance_id]
                            if p['queue'] and
-                              (p['snet'] or p['isolated'])]
+                           (p['snet'] or p['isolated'])]
             if other_ports:
                 # found port(s) with a queue to share
                 msg = ('associating queue for snet/isolated port '
@@ -425,7 +425,7 @@ class RepairQueues(HunterKillerPortOps):
     def update_queue_max_bandwidth_rate(self, queue, max_bandwidth_rate):
         msg = 'update max_bandwidth_rate for queue |%s| from |%s| to |%s|'
         LOG.action(msg, queue['uuid'], queue['max_bandwidth_rate'],
-                                       max_bandwidth_rate)
+                   max_bandwidth_rate)
 
         if self.action == 'fix':
             try:
@@ -446,16 +446,18 @@ class NoVMIDPorts(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports(relations, limit=limit)
+        nvp_ports = [p for p in self.nvp.get_ports(relations, limit=limit)]
+        instances = self.nova.get_instances_hashed_by_id()
+        interfaces = self.melange.get_interfaces_hashed_by_id()
 
         print ('Walking ports to find missing vmid tags, '
                'check out loglevel INFO if you want to watch. a . is a port')
 
-        self.walk_port_list(nvp_ports)
+        self.walk_port_list(nvp_ports, instances, interfaces)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(ports=self.ports_checked)
 
-    def walk_port_list(self, nvp_ports):
+    def walk_port_list(self, nvp_ports, instances, interfaces):
         # walk port list checking for ports without vmids
         # if found, attempt to get vmid and add it
         # if any error is raised getting instance, ignore the port
@@ -478,7 +480,8 @@ class NoVMIDPorts(HunterKillerPortOps):
                 # couldn't get vmid from queue, need instance
                 # ignore port if finding it raises
                 try:
-                    instance = self.get_instance_by_port(port) or {}
+                    instance = self.get_instance_by_port(port, instances,
+                                                         interfaces)
                     if instance.get('uuid'):
                         self.port_add_vmid(port, instance['uuid'])
                         vmids_fixed += 1
@@ -513,11 +516,11 @@ class OrphanQueues(HunterKiller):
 
         # get queue uuids, excepting the qos_pool special queues
         all_queues = [q['uuid'] for q in self.nvp.get_queues()
-                                if aiclib.h.tags(q).get('qos_pool') is None]
+                      if aiclib.h.tags(q).get('qos_pool') is None]
         self.queues_checked = len(all_queues)
 
         # get all the ports from nvp and then find their queues
-        nvp_ports = self.nvp.get_ports(port_relations)
+        nvp_ports = [p for p in self.nvp.get_ports(port_relations)]
         associated_queues = self.get_associated_queues(nvp_ports)
 
         self.fix(all_queues, associated_queues)
@@ -556,3 +559,95 @@ class OrphanQueues(HunterKiller):
             except aiclib.nvp.ResourceNotFound:
                 # queue went away in the mean time
                 pass
+
+
+class OrphanInterfaces(HunterKiller):
+    """looks for interfaces in melange that are orphan"""
+    def execute(self, **kwargs):
+        self.start_time = time.time()
+        self.instance_states = {}
+        self.no_macs = 0
+        self.no_ips = 0
+        interfaces = self.melange.get_interfaces()
+        self.instances = self.nova.get_instances()
+        self.instances = dict((i['uuid'], i) for i in self.instances)
+        print 'total interfaces:', len(interfaces)
+
+        for interface in interfaces:
+            self.populate_instance(interface)
+            self.verify_interface(interface)
+
+        print 'instance states by interface:'
+        for k, v in self.instance_states.iteritems():
+            print '    %s: %s' % (k, v)
+        print 'interfaces with no mac address', self.no_macs
+        print 'interfaces with no ips', self.no_ips
+
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made()
+
+    def verify_interface(self, interface):
+        instance = interface['instance'] or {}
+        state = instance.get('vm_state')
+        if state not in self.instance_states:
+            self.instance_states[state] = 1
+        else:
+            self.instance_states[state] += 1
+
+        if interface['mac'] is None:
+            self.no_macs += 1
+
+        if interface['ips'] is None:
+            self.no_ips += 1
+
+    def populate_instance(self, interface):
+        instance_id = interface['device_id']
+        interface['instance'] = self.instances.get(instance_id)
+
+
+class MigrateQuark(HunterKiller):
+    """ pulls data out of nvp and migrates it to quark db """
+    def execute(self, **kwargs):
+        self.ports_checked = 0
+        self.start_time = time.time()
+        relations = ('VirtualInterfaceConfig', 'LogicalQueueConfig',
+                     'LogicalSwitchConfig')
+        switches = self.nvp.get_switches()
+        switches = [switch for switch in switches]
+        print len(switches)
+        return
+        nvp_ports = [p for p in self.nvp.get_ports(relations)]
+#        nvp_ports = [port for port in nvp_ports]
+#        print 'total ports', len(nvp_ports)
+
+        melange_interfaces = self.melange.get_interfaces()
+
+        ports = self.vmidify_ports(nvp_ports)
+        good_ports = []
+        nones = 0
+        for interface in melange_interfaces:
+            if interface['address'] is None:
+                nones += 1
+                continue
+            port = ports.get(str(EUI(interface['address'])))
+            if port:
+                good_ports.append(port)
+        print 'matching ports', len(good_ports)
+        print 'melange interfaces', len(melange_interfaces)
+        print 'no address interfaces', nones
+
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made()
+
+    def vmidify_ports(self, nvp_ports):
+        table = {ord(':'): ord('-')}
+        doohickey = {}
+        for port in nvp_ports:
+            vic = port['_relations'].get('VirtualInterfaceConfig')
+            if vic:
+                address = vic['attached_mac'].translate(table).upper()
+                doohickey[address] = port
+        return doohickey
+
+    def vmidify_interfaces(self, interfaces):
+        return dict((i['device_id'], i) for i in interfaces)
