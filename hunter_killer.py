@@ -180,12 +180,6 @@ class OrphanPorts(HunterKillerPortOps):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
         nvp_ports = [p for p in self.nvp.get_ports(relations, limit=limit)]
-        print nvp_ports[0]['_relations']
-        nvp_ports[0]['_relations'] = ''
-        print nvp_ports[0]
-        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
-        self.print_calls_made(ports=self.ports_checked)
-        return
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
