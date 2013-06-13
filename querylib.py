@@ -71,6 +71,7 @@ class NVP(object):
             # handle relations
             self._check_relations(relations)
             query = query.relations(relations)
+            query = query.fields(['uuid', 'tags'])
 
         return IterableQuery(self, query, limit)
 

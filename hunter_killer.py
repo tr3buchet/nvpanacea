@@ -106,6 +106,7 @@ class HunterKillerPortOps(HunterKiller):
         LOG.warn(msg, switch['uuid'], switch['name'])
 
         # lswitch didn't have a qos_pool, have to use transport zone
+        # read: isolated nw port switch
         zone_id = switch['transport_zone_uuid']
         qos_pool = self.get_qos_pool_from_transport_zone_map(zone_id)
         if qos_pool:
@@ -154,7 +155,7 @@ class HunterKillerPortOps(HunterKiller):
                         qos_pool.get('max_bandwidth_rate')}
 
         tags = aiclib.h.tags(nvp_port)
-        port = {'uuid': nvp_port.get('uuid', ''),
+        port = {'uuid': nvp_port['uuid'],
                 'tags': tags,
                 'switch': switch,
                 'qos_pool': qos_pool,
@@ -179,6 +180,9 @@ class OrphanPorts(HunterKillerPortOps):
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
         nvp_ports = [p for p in self.nvp.get_ports(relations, limit=limit)]
+        print nvp_ports[0]['_relations']
+        nvp_ports[0]['_relations'] = ''
+        print nvp_ports[0]
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(ports=self.ports_checked)
         return
@@ -284,27 +288,17 @@ class RepairQueues(HunterKillerPortOps):
             # repairing a queue requires instance and flavor, so
             # we need all instances
             # otherwise we could get vmid queue (more efficient)
-            # NOTE: all good ports will be in the tree for queue repair
-            # in cases where an exception is raised, the port will not
-            # have an instance and will be ignored in queue repair
+            # NOTE: all ports w/instance will be in the tree for queue repair
             port['instance'] = self.get_instance_by_port(port, instances,
                                                          interfaces)
-            # ignore the orphans
+            # ignore ports with no instance (the orphans)
             if port['instance']:
                 self.add_port_to_tree(port, tree)
 
         return tree
 
     def add_port_to_tree(self, port, tree):
-        if port['vmid']:
-            instance_id = port['vmid']
-        elif port['queue'].get('vmid'):
-            instance_id = port['queue']['vmid']
-        elif port['instance'].get('uuid'):
-            instance_id = port['instance']['uuid']
-        else:
-            # don't know instance id, ignore port for queue repair
-            return
+        instance_id = port['instance']['uuid']
 
         if instance_id in tree:
             tree[instance_id].append(port)
