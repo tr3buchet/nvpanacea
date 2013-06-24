@@ -237,7 +237,7 @@ class Nova(MysqlJsonBridgeEndpoint):
             select_list.extend(['instance_type_id', 'rxtx_factor'])
             sql = ('select %s from instances left join instance_types '
                    'on instances.instance_type_id=instance_types.id '
-                   'where uuid="%s"')
+                   'where uuid="%s" and instances.deleted=0')
         else:
             sql = 'select %s from instances where uuid="%s" and deleted=0'
         result = self.run_query(sql % (','.join(select_list), id))
@@ -249,7 +249,7 @@ class Nova(MysqlJsonBridgeEndpoint):
             select_list.extend(['instance_type_id', 'rxtx_factor'])
             sql = ('select %s from instances left join instance_types '
                    'on instances.instance_type_id=instance_types.id '
-                   'where deleted=0')
+                   'where instances.deleted=0')
         else:
             sql = 'select %s from instances where deleted=0'
         return self.run_query(sql % ','.join(select_list))['result']
