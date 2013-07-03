@@ -55,7 +55,7 @@ class NVP(object):
                                              port['uuid']).read()
         return query or None
 
-    def get_ports(self, relations=None, limit=None):
+    def get_ports(self, relations=None, limit=None, queue_uuid=None):
         query = self.connection.lswitch_port('*').query()
 
         # append length to query
@@ -73,7 +73,22 @@ class NVP(object):
             query = query.relations(relations)
             # query = query.fields(['uuid', 'tags'])
 
+        if queue_uuid:
+            query = query.queue_uuid('=', queue_uuid)
+
         return IterableQuery(self, query, limit)
+
+    def get_ports_hashed_by_queue_id(self):
+        relations = ('LogicalQueueConfig', )
+        queue_hash = {}
+        for port in self.get_ports(relations):
+            queue_uuid = port['_relations']['LogicalQueueConfig'].get('uuid')
+            if queue_uuid:
+                if queue_uuid in queue_hash:
+                    queue_hash[queue_uuid].append(port)
+                else:
+                    queue_hash[queue_uuid] = [port]
+        return queue_hash
 
     def port_update_queue(self, port, queue_id):
         self.calls += 1

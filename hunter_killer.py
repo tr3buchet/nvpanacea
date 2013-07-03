@@ -183,8 +183,9 @@ class OrphanPorts(HunterKillerPortOps):
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
-        print ('Walking ports to find orphans, '
+        msg = ('Walking |%s| ports to find orphans, '
                'check out loglevel INFO if you want to watch. a . is a port')
+        print msg % len(nvp_ports)
 
         self.walk_port_list(nvp_ports, instances, interfaces)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
@@ -212,6 +213,7 @@ class OrphanPorts(HunterKillerPortOps):
                     else:
                         down_down[port['instance'].get('vm_state')] = 1
                 except Exception as e:
+                    print
                     LOG.error(e)
                     continue
 
@@ -239,6 +241,7 @@ class OrphanPorts(HunterKillerPortOps):
         return False
 
     def delete_port(self, port):
+        print
         LOG.action('delete port |%s|', port['uuid'])
         if self.action == 'fix':
             try:
@@ -479,6 +482,7 @@ class NoVMIDPorts(HunterKillerPortOps):
         print '\nvm_ids fixed:', vmids_fixed
 
     def port_add_vmid(self, port, vmid):
+        print
         LOG.action('adding vm_id tag |%s| to port |%s|', vmid, port['uuid'])
         if self.action == 'fix':
             self.nvp.port_update_tag(port, 'vm_id', vmid)
@@ -493,53 +497,38 @@ class OrphanQueues(HunterKiller):
         associated with ports. deletes queues which are not associated
     """
     def execute(self, **kwargs):
-        self.ports_checked = 0
         self.start_time = time.time()
 
-        print ('Walking ports to find their associated queues, '
-               'check out loglevel INFO if you want to watch. a . is a port')
-
-        # get all the queues from nvp
-        port_relations = ('LogicalQueueConfig', )
-
-        # get queue uuids, excepting the qos_pool special queues
+        # get the full list of queues, excepting the qos pools
         all_queues = [q['uuid'] for q in self.nvp.get_queues()
                       if aiclib.h.tags(q).get('qos_pool') is None]
         self.queues_checked = len(all_queues)
+        msg = ('Walking |%s| queues to find orphans, a \'.\' is a queue, '
+               'check out loglevel INFO if you want to watch.')
+        print msg % self.queues_checked
 
-        # get all the ports from nvp and then find their queues
-        nvp_ports = [p for p in self.nvp.get_ports(port_relations)]
-        associated_queues = self.get_associated_queues(nvp_ports)
-
-        self.fix(all_queues, associated_queues)
-        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
-        self.print_calls_made(queues=self.queues_checked,
-                              ports=self.ports_checked)
-
-    def get_associated_queues(self, nvp_ports):
-        # returns a list of queue uuids found in port associations
-        associated_queues = []
-        for nvp_port in nvp_ports:
-            self.ports_checked += 1
-            sys.stdout.write('.')
-            sys.stdout.flush()
-
-            nvp_queue = nvp_port['_relations']['LogicalQueueConfig']
-            if nvp_queue and nvp_queue['uuid'] not in associated_queues:
-                associated_queues.append(nvp_queue['uuid'])
-
-        print
-        return associated_queues
-
-    def fix(self, all_queues, associated_queues):
+        # loop through queues, deleting the queues with no associated ports
         orphans = 0
         for queue in all_queues:
-            if queue not in associated_queues:
+            sys.stdout.write('.')
+            sys.stdout.flush()
+            if not self.get_associated_ports(queue):
                 orphans += 1
                 self.delete_queue(queue)
+
+        # print results
+        print
         print 'orphans fixed:', orphans
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made(queues=self.queues_checked)
+
+    def get_associated_ports(self, queue_uuid):
+        port_relations = ('LogicalQueueConfig', )
+        return [p for p in self.nvp.get_ports(port_relations,
+                                              queue_uuid=queue_uuid)]
 
     def delete_queue(self, queue):
+        print
         LOG.action('delete queue |%s|', queue)
         if self.action == 'fix':
             try:
