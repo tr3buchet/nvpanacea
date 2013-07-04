@@ -149,7 +149,12 @@ class NVP(object):
 
     def delete_queue(self, id):
         self.calls += 1
-        self.connection.qos(id).delete()
+        while True:
+            try:
+                return self.connection.qos(id).delete()
+            except aiclib.nvp.ServiceUnavailable as e:
+                LOG.error(e)
+                time.sleep(1)
 
     def update_queue_maxbw_rate(self, queue, max_bandwidth_rate):
         self.calls += 1
