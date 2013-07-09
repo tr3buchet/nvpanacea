@@ -499,6 +499,11 @@ class OrphanQueues(HunterKiller):
     def execute(self, **kwargs):
         self.start_time = time.time()
 
+        # get the full list of queues, excepting the qos pools
+        all_queues = [q['uuid'] for q in self.nvp.get_queues()
+                      if aiclib.h.tags(q).get('qos_pool') is None]
+        self.queues_checked = len(all_queues)
+
         # get nvp_ports and port_hash manually
         url = '/ws.v1/lswitch/*/lport'
         payload = {'fields': '*',
@@ -514,10 +519,7 @@ class OrphanQueues(HunterKiller):
                 else:
                     port_hash[queue_uuid] = [port]
 
-        # get the full list of queues, excepting the qos pools
-        all_queues = [q['uuid'] for q in self.nvp.get_queues()
-                      if aiclib.h.tags(q).get('qos_pool') is None]
-        self.queues_checked = len(all_queues)
+        # print what we've managed to get (sanity check)
         msg = ('Found |%s| queues by list\n'
                'Found |%s| ports by list\n'
                'Found |%s| queues associated with ports\n'
