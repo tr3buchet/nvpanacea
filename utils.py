@@ -5,7 +5,6 @@ import os
 import prettytable
 import re
 import socket
-import time
 
 import aiclib
 
@@ -117,24 +116,8 @@ class IterableQuery(object):
             self.nvp.calls += 1
             if self.first:
                 self.first = False
-                return self.query_results()
-            return self.query_next()
+                return self.query.results()['results']
+            return self.query.next()['results']
         except (TypeError, aiclib.nvp.NVPException):
             self.nvp.calls -= 1
             raise StopIteration()
-
-    def query_results(self):
-        while True:
-            try:
-                return self.query.results()['results']
-            except aiclib.nvp.ServiceUnavailable as e:
-                LOG.error(e)
-                time.sleep(1)
-
-    def query_next(self):
-        while True:
-            try:
-                return self.query.next()['results']
-            except aiclib.nvp.ServiceUnavailable as e:
-                LOG.error(e)
-                time.sleep(1)
