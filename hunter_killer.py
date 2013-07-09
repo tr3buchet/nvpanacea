@@ -502,6 +502,7 @@ class OrphanQueues(HunterKiller):
         # get the full list of queues, excepting the qos pools
         all_queues = [q['uuid'] for q in self.nvp.get_queues()
                       if aiclib.h.tags(q).get('qos_pool') is None]
+        port_hash = self.nvp.get_ports_hashed_by_queue_id()
         self.queues_checked = len(all_queues)
         msg = ('Walking |%s| queues to find orphans, a \'.\' is a queue, '
                'check out loglevel INFO if you want to watch.')
@@ -512,7 +513,7 @@ class OrphanQueues(HunterKiller):
         for queue in all_queues:
             sys.stdout.write('.')
             sys.stdout.flush()
-            if not self.get_associated_ports(queue):
+            if not self.get_associated_ports(queue, port_hash):
                 orphans += 1
                 self.delete_queue(queue)
 
@@ -522,7 +523,9 @@ class OrphanQueues(HunterKiller):
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(queues=self.queues_checked)
 
-    def get_associated_ports(self, queue_uuid):
+    def get_associated_ports(self, queue_uuid, port_hash=None):
+        if port_hash is not None:
+            return port_hash[queue_uuid] if queue_uuid in port_hash else []
         port_relations = ('LogicalQueueConfig', )
         return [p for p in self.nvp.get_ports(port_relations,
                                               queue_uuid=queue_uuid)]
@@ -536,6 +539,8 @@ class OrphanQueues(HunterKiller):
             except aiclib.nvp.ResourceNotFound:
                 # queue went away in the mean time
                 pass
+            except Exception as e:
+                LOG.error(e)
 
 
 class OrphanInterfaces(HunterKiller):
