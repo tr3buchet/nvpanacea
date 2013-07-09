@@ -499,11 +499,31 @@ class OrphanQueues(HunterKiller):
     def execute(self, **kwargs):
         self.start_time = time.time()
 
+        # get nvp_ports and port_hash manually
+        url = '/ws.v1/lswitch/*/lport'
+        payload = {'fields': '*',
+                   'relations': 'LogicalQueueConfig',
+                   '_page_length': 1000}
+        nvp_ports = self.nvp.url_request(url, payload)
+        port_hash = {}
+        for port in nvp_ports:
+            queue_uuid = port['_relations']['LogicalQueueConfig'].get('uuid')
+            if queue_uuid:
+                if queue_uuid in port_hash:
+                    port_hash[queue_uuid].append(port)
+                else:
+                    port_hash[queue_uuid] = [port]
+
         # get the full list of queues, excepting the qos pools
         all_queues = [q['uuid'] for q in self.nvp.get_queues()
                       if aiclib.h.tags(q).get('qos_pool') is None]
-        port_hash = self.nvp.get_ports_hashed_by_queue_id()
         self.queues_checked = len(all_queues)
+        msg = ('Found |%s| queues by list\n'
+               'Found |%s| ports by list\n'
+               'Found |%s| queues associated with ports\n'
+               'ctrl-c in 10 seconds if this doesn\'t look right')
+        print msg % (len(all_queues), len(nvp_ports), len(port_hash.keys()))
+        time.sleep(10)
         msg = ('Walking |%s| queues to find orphans, a \'.\' is a queue, '
                'check out loglevel INFO if you want to watch.')
         print msg % self.queues_checked

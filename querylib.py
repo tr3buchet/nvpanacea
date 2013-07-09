@@ -22,12 +22,35 @@ class NVP(object):
     def __init__(self, url, username, password):
         self.connection = aiclib.nvp.Connection(url, username=username,
                                                 password=password)
+
+        # specifically for self.url_request()
+        self.session = requests.session()
+        self.url = url
+        self.auth = HTTPBasicAuth(username, password)
+
         self.calls = 0
 
         # small memory cache to prevent multiple lookups
         self.qos_pools_by_id = {}
         self.qos_pools_by_name = {}
         self.transport_zones = {}
+
+    def url_request(self, url, payload):
+        """make a manual request of NVP, will unroll pages if they exist"""
+        url = self.url + url
+        results = []
+        r = self.session.get(url, params=payload, verify=False, auth=self.auth)
+        r.raise_for_status()
+        output = r.json()
+        results.extend(output.get('results', []))
+        while 'page_cursor' in output:
+            payload['_page_cursor'] = output['page_cursor']
+            r = self.session.get(url, params=payload, verify=False,
+                                 auth=self.auth)
+            r.raise_for_status()
+            output = r.json()
+            results.extend(output.get('results', []))
+        return results
 
     @classmethod
     def _check_relations(cls, relations):
