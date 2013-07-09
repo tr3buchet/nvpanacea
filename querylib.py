@@ -39,18 +39,27 @@ class NVP(object):
         """make a manual request of NVP, will unroll pages if they exist"""
         url = self.url + url
         results = []
-        r = self.session.get(url, params=payload, verify=False, auth=self.auth)
-        r.raise_for_status()
+        r = self._request_with_retry(url, payload)
         output = r.json()
         results.extend(output.get('results', []))
+
+        # if we got a page_cursor, handle it
         while 'page_cursor' in output:
             payload['_page_cursor'] = output['page_cursor']
-            r = self.session.get(url, params=payload, verify=False,
-                                 auth=self.auth)
-            r.raise_for_status()
+            r = self._request_with_retry(url, payload)
             output = r.json()
             results.extend(output.get('results', []))
         return results
+
+    def _request_with_retry(self, url, payload):
+        while True:
+            try:
+                r = self.session.get(url, params=payload, verify=False,
+                                     auth=self.auth)
+                r.raise_for_status()
+                return r
+            except requests.exceptions.HTTPError as e:
+                LOG.error('HTTP exception |%s|, retrying' % e)
 
     @classmethod
     def _check_relations(cls, relations):
