@@ -137,6 +137,8 @@ class NVP(object):
                    '_page_length': 1000}
         if relations:
             payload['relations'] = relations
+        if queue_uuid:
+            payload['queue_uuid'] = queue_uuid
         return self.url_request(url, 'get', payload)
 
     def get_ports_hashed_by_queue_id(self):
@@ -200,6 +202,12 @@ class NVP(object):
 
         return IterableQuery(self, query, limit)
 
+    def get_queues_manual(self):
+        url = '/ws.v1/lqueue'
+        payload = {'fields': '*',
+                   '_page_length': 1000}
+        return self.url_request(url, 'get', payload)
+
     def create_queue(self, display_name, vmid, max_bandwidth_rate):
         self.calls += 1
         queue = self.connection.qos()
@@ -211,6 +219,13 @@ class NVP(object):
     def delete_queue(self, id):
         self.calls += 1
         self.connection.qos(id).delete()
+
+    def delete_queue_manual(self, id):
+        url = '/ws.v1/lqueue/%s' % id
+        try:
+            self.url_request(url, 'delete')
+        except ResourceNotFound:
+            pass
 
     def update_queue_maxbw_rate(self, queue, max_bandwidth_rate):
         self.calls += 1

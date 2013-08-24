@@ -244,7 +244,7 @@ class OrphanPorts(HunterKillerPortOps):
         print
         LOG.action('delete port |%s|', port['uuid'])
         if self.action == 'fix':
-                return self.nvp.delete_port_manual(port)
+            self.nvp.delete_port_manual(port)
 
 
 class RepairQueues(HunterKillerPortOps):
@@ -496,16 +496,13 @@ class OrphanQueues(HunterKiller):
         self.start_time = time.time()
 
         # get the full list of queues, excepting the qos pools
-        all_queues = [q['uuid'] for q in self.nvp.get_queues()
+        all_queues = [q['uuid'] for q in self.nvp.get_queues_manual()
                       if aiclib.h.tags(q).get('qos_pool') is None]
         self.queues_checked = len(all_queues)
 
         # get nvp_ports and port_hash manually
-        url = '/ws.v1/lswitch/*/lport'
-        payload = {'fields': '*',
-                   'relations': 'LogicalQueueConfig',
-                   '_page_length': 1000}
-        nvp_ports = self.nvp.url_request(url, payload)
+        port_relations = ('LogicalQueueConfig', )
+        nvp_ports = self.nvp.get_ports_manual(port_relations)
         port_hash = {}
         for port in nvp_ports:
             queue_uuid = port['_relations']['LogicalQueueConfig'].get('uuid')
@@ -545,20 +542,13 @@ class OrphanQueues(HunterKiller):
         if port_hash is not None:
             return port_hash[queue_uuid] if queue_uuid in port_hash else []
         port_relations = ('LogicalQueueConfig', )
-        return [p for p in self.nvp.get_ports(port_relations,
-                                              queue_uuid=queue_uuid)]
+        return self.nvp.get_ports_manual(port_relations, queue_uuid=queue_uuid)
 
     def delete_queue(self, queue):
         print
         LOG.action('delete queue |%s|', queue)
         if self.action == 'fix':
-            try:
-                return self.nvp.delete_queue(queue)
-            except aiclib.nvp.ResourceNotFound:
-                # queue went away in the mean time
-                pass
-            except Exception as e:
-                LOG.error(e)
+            self.nvp.delete_queue_manual(queue)
 
 
 class OrphanInterfaces(HunterKiller):
