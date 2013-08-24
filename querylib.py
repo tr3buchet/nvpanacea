@@ -1,4 +1,5 @@
 import logging
+import time
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -10,6 +11,10 @@ from utils import IterableQuery
 
 LOG = logging.getLogger(__name__)
 LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
+
+
+class ResourceNotFound(Exception):
+    pass
 
 
 class NVP(object):
@@ -35,31 +40,39 @@ class NVP(object):
         self.qos_pools_by_name = {}
         self.transport_zones = {}
 
-    def url_request(self, url, payload):
+    def url_request(self, url, method='get', payload=None):
         """make a manual request of NVP, will unroll pages if they exist"""
         url = self.url + url
         results = []
-        r = self._request_with_retry(url, payload)
+        r = self._request_with_retry(url, method, payload)
+        if method == 'delete':
+            return
         output = r.json()
         results.extend(output.get('results', []))
 
         # if we got a page_cursor, handle it
         while 'page_cursor' in output:
             payload['_page_cursor'] = output['page_cursor']
-            r = self._request_with_retry(url, payload)
+            r = self._request_with_retry(url, method, payload)
             output = r.json()
             results.extend(output.get('results', []))
         return results
 
-    def _request_with_retry(self, url, payload):
+    def _request_with_retry(self, url, method='get', payload=None):
+        http_method = getattr(self.session, method)
         while True:
             try:
-                r = self.session.get(url, params=payload, verify=False,
-                                     auth=self.auth)
+                self.calls += 1
+                r = http_method(url, params=payload, verify=False,
+                                auth=self.auth)
                 r.raise_for_status()
                 return r
             except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    LOG.error('HTTP exception |%s| |%s %s|' % (e, method, url))
+                    raise ResourceNotFound('not found |%s|' % url)
                 LOG.error('HTTP exception |%s|, retrying' % e)
+                time.sleep(.01)
 
     @classmethod
     def _check_relations(cls, relations):
@@ -79,6 +92,14 @@ class NVP(object):
         self.calls += 1
         self.connection.lswitch_port(port['switch']['uuid'],
                                      port['uuid']).delete()
+
+    def delete_port_manual(self, port):
+        url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
+                                              port['uuid'])
+        try:
+            self.url_request(url, 'delete')
+        except ResourceNotFound:
+            pass
 
     def get_port(self, port):
         # get an nvp port form our local dict object
@@ -109,6 +130,14 @@ class NVP(object):
             query = query.queue_uuid('=', queue_uuid)
 
         return IterableQuery(self, query, limit)
+
+    def get_ports_manual(self, relations=None, queue_uuid=None):
+        url = '/ws.v1/lswitch/*/lport'
+        payload = {'fields': '*',
+                   '_page_length': 1000}
+        if relations:
+            payload['relations'] = relations
+        return self.url_request(url, 'get', payload)
 
     def get_ports_hashed_by_queue_id(self):
         relations = ('LogicalQueueConfig', )
@@ -200,6 +229,18 @@ class NVP(object):
         self.qos_pools_by_id[id] = pool
         return pool
 
+    def get_qos_pool_by_id_manual(self, id):
+        if self.qos_pools_by_id.get(id):
+            return self.qos_pools_by_id[id]
+        url = '/ws.v1/lqueue'
+        payload = {'fields': '*',
+                   'uuid': id}
+        r = self.url_request(url, 'get', payload)
+        if r:
+            self.qos_pools_by_id[id] = r[0]
+            return r[0]
+        raise ResourceNotFound('QOS POOL |%s|' % id)
+
     def get_qos_pool_by_name(self, name):
         if self.qos_pools_by_name.get(name):
             return self.qos_pools_by_name[name]
@@ -213,6 +254,18 @@ class NVP(object):
         self.qos_pools_by_name[name] = pool
         return pool
 
+    def get_qos_pool_by_name_manual(self, name):
+        if self.qos_pools_by_name.get(name):
+            return self.qos_pools_by_name[name]
+        url = '/ws.v1/lqueue'
+        payload = {'fields': '*',
+                   'display_name': name}
+        r = self.url_request(url, 'get', payload)
+        if r:
+            self.qos_pools_by_name[name] = r[0]
+            return r[0]
+        raise ResourceNotFound('QOS POOL |%s|' % name)
+
     #################### TRANSPORT ZONES ######################################
 
     def get_transport_zone_by_id(self, id):
@@ -222,6 +275,18 @@ class NVP(object):
         zone = self.connection.zone(uuid=id).read()
         self.transport_zones[id] = zone
         return zone
+
+    def get_transport_zone_by_id_manual(self, id):
+        if self.transport_zones.get(id):
+            return self.transport_zones[id]
+        url = '/ws.v1/transport-zone'
+        payload = {'fields': '*',
+                   'uuid': id}
+        r = self.url_request(url, 'get', payload)
+        if r:
+            self.transport_zones[id] = r[0]
+            return r[0]
+        raise ResourceNotFound('TRANSPORT ZONE |%s|' % id)
 
 
 class MysqlJsonBridgeEndpoint(object):

@@ -75,27 +75,27 @@ class HunterKillerPortOps(HunterKiller):
     def is_public_switch(self, switch):
         if switch:
             zone_id = switch['transport_zone_uuid']
-            zone = self.nvp.get_transport_zone_by_id(zone_id)
+            zone = self.nvp.get_transport_zone_by_id_manual(zone_id)
             zone_name = zone['display_name']
             return zone_name == 'public'
 
     def is_snet_switch(self, switch):
         if switch:
             zone_id = switch['transport_zone_uuid']
-            zone = self.nvp.get_transport_zone_by_id(zone_id)
+            zone = self.nvp.get_transport_zone_by_id_manual(zone_id)
             zone_name = zone['display_name']
             return zone_name == 'private'
 
     def get_qos_pool_from_switch(self, switch):
         qos_pool_id = switch['tags'].get('qos_pool')
         if qos_pool_id:
-            return self.nvp.get_qos_pool_by_id(qos_pool_id)
+            return self.nvp.get_qos_pool_by_id_manual(qos_pool_id)
 
     def get_qos_pool_from_transport_zone_map(self, zone_id):
-        zone = self.nvp.get_transport_zone_by_id(zone_id)
+        zone = self.nvp.get_transport_zone_by_id_manual(zone_id)
         zone_name = zone['display_name']
         qos_pool_name = zone_qos_pool_map[zone_name]
-        return self.nvp.get_qos_pool_by_name(qos_pool_name)
+        return self.nvp.get_qos_pool_by_name_manual(qos_pool_name)
 
     def get_qos_pool(self, switch):
         qos_pool = self.get_qos_pool_from_switch(switch)
@@ -179,7 +179,7 @@ class OrphanPorts(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = [p for p in self.nvp.get_ports(relations, limit=limit)]
+        nvp_ports = self.nvp.get_ports_manual(relations)
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
@@ -244,11 +244,7 @@ class OrphanPorts(HunterKillerPortOps):
         print
         LOG.action('delete port |%s|', port['uuid'])
         if self.action == 'fix':
-            try:
-                return self.nvp.delete_port(port)
-            except aiclib.nvp.ResourceNotFound:
-                # port went away in the mean time
-                pass
+                return self.nvp.delete_port_manual(port)
 
 
 class RepairQueues(HunterKillerPortOps):
