@@ -62,6 +62,8 @@ class NVP(object):
         http_method = getattr(self.session, method)
         while True:
             try:
+                LOG.info('making call |%s - %s| with payload |%s|',
+                         method, url, payload)
                 self.calls += 1
                 r = http_method(url, params=payload, verify=False,
                                 auth=self.auth)

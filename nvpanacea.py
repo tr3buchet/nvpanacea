@@ -34,13 +34,14 @@ def main():
     desc = 'view and modify ports using nvp/melange/nova'
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('-l', '--list', action=_ListAction,
-                       dest='listenvs',
-                       help='list all configured environments')
+                        dest='listenvs',
+                        help='list all configured environments')
     parser.add_argument('--limit', type=int, action='store',
                         help="limit port selection to number specified",
                         default=None)
     parser.add_argument('--loglevel', action='store',
-            help="set log level: DEBUG, INFO, WARN, ACTION, ERROR..",
+                        help="set log level: DEBUG, INFO, WARN, "
+                             "ACTION, ERROR..",
                         default='ACTION')
     parser.add_argument('-e', '--environment', action='store',
                         help="Environment to run against, for options use -l")
