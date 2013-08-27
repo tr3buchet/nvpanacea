@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 
@@ -40,40 +41,64 @@ class NVP(object):
         self.qos_pools_by_name = {}
         self.transport_zones = {}
 
-    def url_request(self, url, method='get', payload=None):
+    @staticmethod
+    def tags_to_dict(obj):
+        """untargs an object's tags"""
+        return dict((t['scope'], t['tag']) for t in obj['tags'])
+
+    @staticmethod
+    def dict_to_tags(the_d):
+        """targs up some tags from a dict"""
+        return [{'scope': k, 'tag': v} for k, v in the_d.iteritems()]
+
+    def url_request(self, url, method='get', **kwargs):
         """make a manual request of NVP, will unroll pages if they exist"""
         url = self.url + url
         results = []
-        r = self._request_with_retry(url, method, payload)
+        r = self._request_with_retry(url, method, **kwargs)
         if method == 'delete':
             return
+        elif method == 'post' or method == 'put':
+            return r.json()
+
         output = r.json()
-        results.extend(output.get('results', []))
+        if 'results' in output:
+            results.extend(output.get('results', []))
+        else:
+            results.append(output)
 
         # if we got a page_cursor, handle it
         while 'page_cursor' in output:
-            payload['_page_cursor'] = output['page_cursor']
-            r = self._request_with_retry(url, method, payload)
+            if 'params' in kwargs:
+                kwargs['params']['_page_cursor'] = output['page_cursor']
+            else:
+                kwargs['params'] = {'_page_cursor': output['page_cursor']}
+            r = self._request_with_retry(url, method, **kwargs)
             output = r.json()
             results.extend(output.get('results', []))
         return results
 
-    def _request_with_retry(self, url, method='get', payload=None):
+    def _request_with_retry(self, url, method='get', **kwargs):
         http_method = getattr(self.session, method)
         while True:
             try:
-                LOG.info('making call |%s - %s| with payload |%s|',
-                         method, url, payload)
+                LOG.info('making call |%s - %s| |%s|' %
+                         (method, url, kwargs))
                 self.calls += 1
-                r = http_method(url, params=payload, verify=False,
-                                auth=self.auth)
+                r = http_method(url, verify=False, auth=self.auth,
+                                timeout=30, **kwargs)
                 r.raise_for_status()
                 return r
+            except requests.exceptions.Timeout:
+                LOG.error('Timeout, retrying. |%s - %s| |%s|' %
+                          (method, url, kwargs))
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 404:
-                    LOG.error('HTTP exception |%s| |%s %s|' % (e, method, url))
+                    LOG.error('HTTP exception |%s| |%s - %s| |%s|' %
+                              (e, method, url, kwargs))
                     raise ResourceNotFound('not found |%s|' % url)
-                LOG.error('HTTP exception |%s|, retrying' % e)
+                LOG.error('HTTP exception |%s| |%s - %s| |%s|, retrying' %
+                          (e, method, url, kwargs))
                 time.sleep(.01)
 
     @classmethod
@@ -135,13 +160,13 @@ class NVP(object):
 
     def get_ports_manual(self, relations=None, queue_uuid=None):
         url = '/ws.v1/lswitch/*/lport'
-        payload = {'fields': '*',
-                   '_page_length': 1000}
+        params = {'fields': '*',
+                  '_page_length': 1000}
         if relations:
-            payload['relations'] = relations
+            params['relations'] = relations
         if queue_uuid:
-            payload['queue_uuid'] = queue_uuid
-        return self.url_request(url, 'get', payload)
+            params['queue_uuid'] = queue_uuid
+        return self.url_request(url, 'get', params=params)
 
     def get_ports_hashed_by_queue_id(self):
         relations = ('LogicalQueueConfig', )
@@ -161,6 +186,16 @@ class NVP(object):
                                             port['uuid'])
         port.qosuuid(queue_id)
         return port.update()
+
+    def port_update_queue_manual(self, port, queue_id):
+        url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
+                                              port['uuid'])
+        data = {'queue_uuid': queue_id}
+        try:
+            self.url_request(url, 'put', data=json.dumps(data))
+        except ResourceNotFound:
+            LOG.error('port |%s| was not associated with queue |%s|' %
+                      (port['uuid'], queue_id))
 
     def port_update_tag(self, port, tag_scope, tag_value):
         # port passed in needs tags (so only 1 call)
@@ -206,9 +241,9 @@ class NVP(object):
 
     def get_queues_manual(self):
         url = '/ws.v1/lqueue'
-        payload = {'fields': '*',
-                   '_page_length': 1000}
-        return self.url_request(url, 'get', payload)
+        params = {'fields': '*',
+                  '_page_length': 1000}
+        return self.url_request(url, 'get', params=params)
 
     def create_queue(self, display_name, vmid, max_bandwidth_rate):
         self.calls += 1
@@ -217,6 +252,13 @@ class NVP(object):
         queue.tags(aiclib.h.tags({'vmid': vmid}))
         queue.maxbw_rate(max_bandwidth_rate)
         return queue.create()
+
+    def create_queue_manual(self, display_name, vmid, max_bandwidth_rate):
+        url = '/ws.v1/lqueue'
+        data = {'display_name': display_name,
+                'tags': self.dict_to_tags({'vmid': vmid}),
+                'max_bandwidth_rate': max_bandwidth_rate}
+        return self.url_request(url, 'post', data=json.dumps(data))
 
     def delete_queue(self, id):
         self.calls += 1
@@ -235,6 +277,14 @@ class NVP(object):
         queue.maxbw_rate(max_bandwidth_rate)
         return queue.update()
 
+    def update_queue_maxbw_rate_manual(self, queue, max_bandwidth_rate):
+        url = '/ws.v1/lqueue/%s' % queue['uuid']
+        data = {'max_bandwidth_rate': max_bandwidth_rate}
+        try:
+            self.url_request(url, 'put', data=json.dumps(data))
+        except ResourceNotFound:
+            LOG.error('queue |%s| was not found to update!!' % queue['uuid'])
+
     #################### QOS POOLS ############################################
     # a qos pool is actually a queue but these 2 are special
 
@@ -250,9 +300,9 @@ class NVP(object):
         if self.qos_pools_by_id.get(id):
             return self.qos_pools_by_id[id]
         url = '/ws.v1/lqueue'
-        payload = {'fields': '*',
-                   'uuid': id}
-        r = self.url_request(url, 'get', payload)
+        params = {'fields': '*',
+                  'uuid': id}
+        r = self.url_request(url, 'get', params=params)
         if r:
             self.qos_pools_by_id[id] = r[0]
             return r[0]
@@ -275,9 +325,9 @@ class NVP(object):
         if self.qos_pools_by_name.get(name):
             return self.qos_pools_by_name[name]
         url = '/ws.v1/lqueue'
-        payload = {'fields': '*',
-                   'display_name': name}
-        r = self.url_request(url, 'get', payload)
+        params = {'fields': '*',
+                  'display_name': name}
+        r = self.url_request(url, 'get', params=params)
         if r:
             self.qos_pools_by_name[name] = r[0]
             return r[0]
@@ -297,9 +347,9 @@ class NVP(object):
         if self.transport_zones.get(id):
             return self.transport_zones[id]
         url = '/ws.v1/transport-zone'
-        payload = {'fields': '*',
-                   'uuid': id}
-        r = self.url_request(url, 'get', payload)
+        params = {'fields': '*',
+                  'uuid': id}
+        r = self.url_request(url, 'get', params=params)
         if r:
             self.transport_zones[id] = r[0]
             return r[0]
@@ -308,8 +358,8 @@ class NVP(object):
 
 class MysqlJsonBridgeEndpoint(object):
     def run_query(self, sql):
-        payload = {'sql': sql}
-        r = self.session.post(self.url, data=payload,
+        data = {'sql': sql}
+        r = self.session.post(self.url, data=data,
                               verify=False, auth=self.auth)
         self.calls += 1
         r.raise_for_status()

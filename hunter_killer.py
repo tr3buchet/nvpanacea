@@ -4,11 +4,7 @@ import time
 from datetime import timedelta
 from netaddr import EUI
 
-import aiclib
 import querylib
-
-#from gevent.pool import Pool
-#from gevent.coros import Semaphore
 
 
 LOG = logging.getLogger(__name__)
@@ -125,7 +121,7 @@ class HunterKillerPortOps(HunterKiller):
         queue = {}
         nvp_queue = nvp_port['_relations'].get('LogicalQueueConfig')
         if nvp_queue:
-            tags = aiclib.h.tags(nvp_queue)
+            tags = self.nvp.tags_to_dict(nvp_queue)
             queue = {'uuid': nvp_queue['uuid'],
                      'max_bandwidth_rate': nvp_queue.get('max_bandwidth_rate'),
                      'vmid': tags.get('vmid'),
@@ -143,7 +139,7 @@ class HunterKillerPortOps(HunterKiller):
         qos_pool = {}
         nvp_switch = nvp_port['_relations'].get('LogicalSwitchConfig')
         if nvp_switch:
-            tags = aiclib.h.tags(nvp_switch)
+            tags = self.nvp.tags_to_dict(nvp_switch)
             switch = {'uuid': status.get('lswitch_uuid'),
                       'name': nvp_switch['display_name'],
                       'tags': tags,
@@ -154,7 +150,7 @@ class HunterKillerPortOps(HunterKiller):
                         'max_bandwidth_rate':
                         qos_pool.get('max_bandwidth_rate')}
 
-        tags = aiclib.h.tags(nvp_port)
+        tags = self.nvp.tags_to_dict(nvp_port)
         port = {'uuid': nvp_port['uuid'],
                 'tags': tags,
                 'switch': switch,
@@ -260,12 +256,9 @@ class RepairQueues(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = [p for p in self.nvp.get_ports(relations)]
+        nvp_ports = self.nvp.get_ports_manual(relations)
         instances = self.nova.get_instances_hashed_by_id(join_flavor=True)
         interfaces = self.melange.get_interfaces_hashed_by_id()
-
-        print ('populating tree, check out loglevel INFO if you want to watch,'
-               ' a . is a port')
 
         tree = self.populate_tree(nvp_ports, instances, interfaces)
         self.fix(tree)
@@ -382,11 +375,11 @@ class RepairQueues(HunterKillerPortOps):
 
         LOG.action('creating queue: |%s|', queue)
         if self.action == 'fix':
-            nvp_queue = self.nvp.create_queue(**queue)
+            nvp_queue = self.nvp.create_queue_manual(**queue)
             if nvp_queue:
                 return {'uuid': nvp_queue['uuid'],
                         'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
-                        'vmid': aiclib.h.tags(nvp_queue).get('vmid')}
+                        'vmid': self.nvp.tags_to_dict(nvp_queue).get('vmid')}
             else:
                 LOG.error('queue creation failed for port |%s|', port['uuid'])
         else:
@@ -398,12 +391,8 @@ class RepairQueues(HunterKillerPortOps):
         LOG.action('associating port |%s| with queue |%s|',
                    port['uuid'], queue['uuid'])
         if self.action == 'fix':
-            try:
-                self.nvp.port_update_queue(port, queue['uuid'])
-                port['queue'] = queue
-            except aiclib.nvp.ResourceNotFound:
-                LOG.error('port was not associated!')
-                # TODO: delete the queue we just made
+            self.nvp.port_update_queue_manual(port, queue['uuid'])
+            port['queue'] = queue
         else:
             # in fixnoop, we need to "associate" the queue for similar
             # behavior to what happens in fix mode
@@ -415,11 +404,7 @@ class RepairQueues(HunterKillerPortOps):
                    max_bandwidth_rate)
 
         if self.action == 'fix':
-            try:
-                self.nvp.update_queue_maxbw_rate(queue, max_bandwidth_rate)
-            except aiclib.nvp.ResourceNotFound:
-                LOG.error('queue |%s| was not updated', queue['uuid'])
-                return queue
+            self.nvp.update_queue_maxbw_rate_manual(queue, max_bandwidth_rate)
 
         # update queue data structure
         queue['max_bandwidth_rate'] = max_bandwidth_rate
@@ -497,7 +482,7 @@ class OrphanQueues(HunterKiller):
 
         # get the full list of queues, excepting the qos pools
         all_queues = [q['uuid'] for q in self.nvp.get_queues_manual()
-                      if aiclib.h.tags(q).get('qos_pool') is None]
+                      if self.nvp.tags_to_dict(q).get('qos_pool') is None]
         self.queues_checked = len(all_queues)
 
         # get nvp_ports and port_hash manually
