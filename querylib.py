@@ -82,7 +82,7 @@ class NVP(object):
         http_method = getattr(self.session, method)
         while True:
             try:
-                LOG.info('making call |%s - %s| |%s|' %
+                LOG.info('making nvp call |%s - %s| |%s|' %
                          (method, url, kwargs))
                 self.calls += 1
                 r = http_method(url, verify=False, auth=self.auth,
@@ -206,6 +206,16 @@ class NVP(object):
                                                       port['uuid'])
         port_query_obj.tags(aiclib.h.tags(tags))
         return port_query_obj.update()
+
+    def port_update_tags_manual(self, port):
+        url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
+                                              port['uuid'])
+        data = {'tags': self.dict_to_tags(port['tags'])}
+        try:
+            self.url_request(url, 'put', data=json.dumps(data))
+        except ResourceNotFound:
+            LOG.error('port |%s| tags were not updated to |%s|' %
+                      (port['uuid'], port['tags']))
 
     #################### SWITCHES #############################################
 

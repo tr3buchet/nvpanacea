@@ -99,7 +99,7 @@ class HunterKillerPortOps(HunterKiller):
             return qos_pool
 
         msg = 'switch |%s||%s| does not have a qos pool!'
-        LOG.warn(msg, switch['uuid'], switch['name'])
+        LOG.warn(msg % (switch['uuid'], switch['name']))
 
         # lswitch didn't have a qos_pool, have to use transport zone
         # read: isolated nw port switch
@@ -111,7 +111,7 @@ class HunterKillerPortOps(HunterKiller):
         LOG.error('qos pool couldnt be found using transport zone map either!')
 
     def create_port_dict(self, nvp_port):
-        LOG.info('populating port |%s|', nvp_port['uuid'])
+        LOG.info('populating port |%s|' % nvp_port['uuid'])
 
         attachment = {}
         nvp_attachment = nvp_port['_relations'].get('LogicalPortAttachment')
@@ -418,7 +418,7 @@ class NoVMIDPorts(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = [p for p in self.nvp.get_ports(relations, limit=limit)]
+        nvp_ports = self.nvp.get_ports_manual(relations)
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
@@ -440,7 +440,7 @@ class NoVMIDPorts(HunterKillerPortOps):
             sys.stdout.write('.')
             sys.stdout.flush()
 
-            if port['tags'].get('vm_id') is None:
+            if port['vmid'] is None:
                 LOG.warn('port |%s| has no vm_id tag', port['uuid'])
 
                 # attempt to get vmid from queue
@@ -464,13 +464,11 @@ class NoVMIDPorts(HunterKillerPortOps):
 
     def port_add_vmid(self, port, vmid):
         print
-        LOG.action('adding vm_id tag |%s| to port |%s|', vmid, port['uuid'])
+        LOG.action('adding vm_id tag |%s| to port |%s|' % (vmid, port['uuid']))
+        port['tags']['vm_id'] = vmid
+        port['vmid'] = vmid
         if self.action == 'fix':
-            self.nvp.port_update_tag(port, 'vm_id', vmid)
-        else:
-            # in fixnoop, we need to "associate" the queue for similar
-            # behavior to what happens in fix mode
-            port['vmid'] = vmid
+            self.nvp.port_update_tags_manual(port)
 
 
 class OrphanQueues(HunterKiller):
