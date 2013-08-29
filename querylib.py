@@ -138,10 +138,12 @@ class NVP(object):
     #################### QUEUES ############################################
 
     def get_queues(self):
+        """returns all queues, NOTE: removes qos_pools from list"""
         url = '/ws.v1/lqueue'
         params = {'fields': '*',
                   '_page_length': 1000}
-        return self.url_request(url, 'get', params=params)
+        return [q for q in self.url_request(url, 'get', params=params)
+                if self.tags_to_dict(q).get('qos_pool') is None]
 
     def create_queue(self, display_name, vmid, max_bandwidth_rate):
         url = '/ws.v1/lqueue'

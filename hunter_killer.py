@@ -501,8 +501,11 @@ class OrphanQueues(HunterKiller):
         self.start_time = time.time()
 
         # get the full list of queues, excepting the qos pools
-        all_queues = [q['uuid'] for q in self.nvp.get_queues()
-                      if self.nvp.tags_to_dict(q).get('qos_pool') is None]
+        all_queues = self.nvp.get_queues()
+        for q in all_queues:
+            if 'qos_pool' in self.nvp.tags_to_dict(q):
+                print 'BAD!!!'
+        return
         self.queues_checked = len(all_queues)
 
         # get nvp_ports and port_hash manually
@@ -533,7 +536,7 @@ class OrphanQueues(HunterKiller):
         for queue in all_queues:
             sys.stdout.write('.')
             sys.stdout.flush()
-            if not self.get_associated_ports(queue, port_hash):
+            if not self.get_associated_ports(queue['uuid'], port_hash):
                 orphans += 1
                 self.delete_queue(queue)
 
