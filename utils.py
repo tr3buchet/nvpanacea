@@ -2,21 +2,10 @@ import ConfigParser
 import keyring
 import logging
 import os
-import prettytable
 import re
 import socket
 
-import aiclib
-
 LOG = logging.getLogger(__name__)
-
-
-def print_list(items, columns):
-    t = prettytable.PrettyTable(columns)
-    t.align = 'l'
-    for item in items:
-        t.add_row([item.get(c, '') for c in columns])
-    print t
 
 
 def get_config_from_file():
@@ -87,37 +76,3 @@ def get_connection_creds(environment):
             'nova_url': nova_url['resolved_url'],
             'nova_username': nova_user,
             'nova_password': nova_pass}
-
-
-class IterableQuery(object):
-    """Iterates over query object multiple batches, supports limit"""
-    def __init__(self, nvp, query, limit=None):
-        self.nvp = nvp
-        self.query = query
-        self.first = True
-        self.limit = limit or 9999999
-
-    def __iter__(self):
-        counter = 0
-        batch = self.get_next_batch()
-        while batch:
-            for item in batch:
-                if counter >= self.limit:
-                    raise StopIteration()
-                counter += 1
-                yield item
-            if counter == self.limit:
-                # if we're at the limit don't don't get next batch
-                raise StopIteration()
-            batch = self.get_next_batch()
-
-    def get_next_batch(self):
-        try:
-            self.nvp.calls += 1
-            if self.first:
-                self.first = False
-                return self.query.results()['results']
-            return self.query.next()['results']
-        except (TypeError, aiclib.nvp.NVPException):
-            self.nvp.calls -= 1
-            raise StopIteration()

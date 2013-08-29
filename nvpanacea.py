@@ -36,9 +36,6 @@ def main():
     parser.add_argument('-l', '--list', action=_ListAction,
                         dest='listenvs',
                         help='list all configured environments')
-    parser.add_argument('--limit', type=int, action='store',
-                        help="limit port selection to number specified",
-                        default=None)
     parser.add_argument('--loglevel', action='store',
                         help="set log level: DEBUG, INFO, WARN, "
                              "ACTION, ERROR..",
@@ -55,12 +52,12 @@ def main():
     logging.basicConfig(level=getattr(logging, args.loglevel),
                         stream=sys.stdout)
 
-    hk_machine = {'orphan_ports': hunter_killer.OrphanPorts,
-                  'repair_queues': hunter_killer.RepairQueues,
-                  'no_vmids': hunter_killer.NoVMIDPorts,
-                  'orphan_queues': hunter_killer.OrphanQueues,
-                  'orphan_interfaces': hunter_killer.OrphanInterfaces,
-                  'migrate_quark': hunter_killer.MigrateQuark}
+    hk_machine = {
+        'orphan_ports': hunter_killer.OrphanPorts,
+        'repair_queues': hunter_killer.RepairQueues,
+        'no_vmids': hunter_killer.NoVMIDPorts,
+        'orphan_queues': hunter_killer.OrphanQueues,
+    }
 
     if args.type not in hk_machine:
         raise Exception('type not supported, choose in %s' % hk_machine.keys())
@@ -69,7 +66,7 @@ def main():
     print 'iz in yur controller iteratin yur business (%s)' % args.action
     sys.stdout.flush()
     hk = hk_machine[args.type](action=args.action, **creds)
-    hk.execute(limit=args.limit)
+    hk.execute()
 
 
 if __name__ == "__main__":

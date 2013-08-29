@@ -2,7 +2,6 @@ import logging
 import sys
 import time
 from datetime import timedelta
-from netaddr import EUI
 
 import querylib
 
@@ -170,7 +169,7 @@ class HunterKillerPortOps(HunterKiller):
 
 class OrphanPorts(HunterKillerPortOps):
     """ deletes orphan ports as they are found """
-    def execute(self, limit=None):
+    def execute(self):
         self.ports_checked = 0
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
@@ -179,6 +178,13 @@ class OrphanPorts(HunterKillerPortOps):
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
+        # print what we've managed to get (sanity check)
+        msg = ('Found |%s| ports\n'
+               'Found |%s| intances\n'
+               'Found |%s| interfaces\n'
+               'ctrl-c in 10 seconds if this doesn\'t look right')
+        print msg % (len(nvp_ports), len(instances), len(interfaces))
+        time.sleep(10)
         msg = ('Walking |%s| ports to find orphans, '
                'check out loglevel INFO if you want to watch. a . is a port')
         print msg % len(nvp_ports)
@@ -259,6 +265,14 @@ class RepairQueues(HunterKillerPortOps):
         nvp_ports = self.nvp.get_ports_manual(relations)
         instances = self.nova.get_instances_hashed_by_id(join_flavor=True)
         interfaces = self.melange.get_interfaces_hashed_by_id()
+
+        # print what we've managed to get (sanity check)
+        msg = ('Found |%s| ports\n'
+               'Found |%s| intances\n'
+               'Found |%s| interfaces\n'
+               'ctrl-c in 10 seconds if this doesn\'t look right')
+        print msg % (len(nvp_ports), len(instances), len(interfaces))
+        time.sleep(10)
 
         tree = self.populate_tree(nvp_ports, instances, interfaces)
         self.fix(tree)
@@ -413,7 +427,7 @@ class RepairQueues(HunterKillerPortOps):
 
 class NoVMIDPorts(HunterKillerPortOps):
     """ adds the vm_id tag to ports which do not have it """
-    def execute(self, limit=None):
+    def execute(self):
         self.ports_checked = 0
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
@@ -421,6 +435,14 @@ class NoVMIDPorts(HunterKillerPortOps):
         nvp_ports = self.nvp.get_ports_manual(relations)
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
+
+        # print what we've managed to get (sanity check)
+        msg = ('Found |%s| ports\n'
+               'Found |%s| intances\n'
+               'Found |%s| interfaces\n'
+               'ctrl-c in 10 seconds if this doesn\'t look right')
+        print msg % (len(nvp_ports), len(instances), len(interfaces))
+        time.sleep(10)
 
         print ('Walking ports to find missing vmid tags, '
                'check out loglevel INFO if you want to watch. a . is a port')
@@ -532,95 +554,3 @@ class OrphanQueues(HunterKiller):
         LOG.action('delete queue |%s|' % queue)
         if self.action == 'fix':
             self.nvp.delete_queue_manual(queue)
-
-
-class OrphanInterfaces(HunterKiller):
-    """looks for interfaces in melange that are orphan"""
-    def execute(self, **kwargs):
-        self.start_time = time.time()
-        self.instance_states = {}
-        self.no_macs = 0
-        self.no_ips = 0
-        interfaces = self.melange.get_interfaces()
-        self.instances = self.nova.get_instances()
-        self.instances = dict((i['uuid'], i) for i in self.instances)
-        print 'total interfaces:', len(interfaces)
-
-        for interface in interfaces:
-            self.populate_instance(interface)
-            self.verify_interface(interface)
-
-        print 'instance states by interface:'
-        for k, v in self.instance_states.iteritems():
-            print '    %s: %s' % (k, v)
-        print 'interfaces with no mac address', self.no_macs
-        print 'interfaces with no ips', self.no_ips
-
-        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
-        self.print_calls_made()
-
-    def verify_interface(self, interface):
-        instance = interface['instance'] or {}
-        state = instance.get('vm_state')
-        if state not in self.instance_states:
-            self.instance_states[state] = 1
-        else:
-            self.instance_states[state] += 1
-
-        if interface['mac'] is None:
-            self.no_macs += 1
-
-        if interface['ips'] is None:
-            self.no_ips += 1
-
-    def populate_instance(self, interface):
-        instance_id = interface['device_id']
-        interface['instance'] = self.instances.get(instance_id)
-
-
-class MigrateQuark(HunterKiller):
-    """ pulls data out of nvp and migrates it to quark db """
-    def execute(self, **kwargs):
-        self.ports_checked = 0
-        self.start_time = time.time()
-        relations = ('VirtualInterfaceConfig', 'LogicalQueueConfig',
-                     'LogicalSwitchConfig')
-        switches = self.nvp.get_switches()
-        switches = [switch for switch in switches]
-        print len(switches)
-        return
-        nvp_ports = [p for p in self.nvp.get_ports(relations)]
-#        nvp_ports = [port for port in nvp_ports]
-#        print 'total ports', len(nvp_ports)
-
-        melange_interfaces = self.melange.get_interfaces()
-
-        ports = self.vmidify_ports(nvp_ports)
-        good_ports = []
-        nones = 0
-        for interface in melange_interfaces:
-            if interface['address'] is None:
-                nones += 1
-                continue
-            port = ports.get(str(EUI(interface['address'])))
-            if port:
-                good_ports.append(port)
-        print 'matching ports', len(good_ports)
-        print 'melange interfaces', len(melange_interfaces)
-        print 'no address interfaces', nones
-
-        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
-        self.print_calls_made()
-
-    def vmidify_ports(self, nvp_ports):
-        table = {ord(':'): ord('-')}
-        doohickey = {}
-        for port in nvp_ports:
-            vic = port['_relations'].get('VirtualInterfaceConfig')
-            if vic:
-                address = vic['attached_mac'].translate(table).upper()
-                doohickey[address] = port
-        return doohickey
-
-    def vmidify_interfaces(self, interfaces):
-        return dict((i['device_id'], i) for i in interfaces)
