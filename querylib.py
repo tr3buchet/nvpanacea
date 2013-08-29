@@ -97,7 +97,7 @@ class NVP(object):
 
     #################### PORTS ################################################
 
-    def delete_port_manual(self, port):
+    def delete_port(self, port):
         url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
                                               port['uuid'])
         try:
@@ -105,7 +105,7 @@ class NVP(object):
         except ResourceNotFound:
             pass
 
-    def get_ports_manual(self, relations=None, queue_uuid=None):
+    def get_ports(self, relations=None, queue_uuid=None):
         url = '/ws.v1/lswitch/*/lport'
         params = {'fields': '*',
                   '_page_length': 1000}
@@ -115,7 +115,7 @@ class NVP(object):
             params['queue_uuid'] = queue_uuid
         return self.url_request(url, 'get', params=params)
 
-    def port_update_queue_manual(self, port, queue_id):
+    def port_update_queue(self, port, queue_id):
         url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
                                               port['uuid'])
         data = {'queue_uuid': queue_id}
@@ -125,7 +125,7 @@ class NVP(object):
             LOG.error('port |%s| was not associated with queue |%s|' %
                       (port['uuid'], queue_id))
 
-    def port_update_tags_manual(self, port):
+    def port_update_tags(self, port):
         url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
                                               port['uuid'])
         data = {'tags': self.dict_to_tags(port['tags'])}
@@ -137,27 +137,27 @@ class NVP(object):
 
     #################### QUEUES ############################################
 
-    def get_queues_manual(self):
+    def get_queues(self):
         url = '/ws.v1/lqueue'
         params = {'fields': '*',
                   '_page_length': 1000}
         return self.url_request(url, 'get', params=params)
 
-    def create_queue_manual(self, display_name, vmid, max_bandwidth_rate):
+    def create_queue(self, display_name, vmid, max_bandwidth_rate):
         url = '/ws.v1/lqueue'
         data = {'display_name': display_name,
                 'tags': self.dict_to_tags({'vmid': vmid}),
                 'max_bandwidth_rate': max_bandwidth_rate}
         return self.url_request(url, 'post', data=json.dumps(data))
 
-    def delete_queue_manual(self, id):
+    def delete_queue(self, id):
         url = '/ws.v1/lqueue/%s' % id
         try:
             self.url_request(url, 'delete')
         except ResourceNotFound:
             pass
 
-    def update_queue_maxbw_rate_manual(self, queue, max_bandwidth_rate):
+    def update_queue_maxbw_rate(self, queue, max_bandwidth_rate):
         url = '/ws.v1/lqueue/%s' % queue['uuid']
         data = {'max_bandwidth_rate': max_bandwidth_rate}
         try:
@@ -168,7 +168,7 @@ class NVP(object):
     #################### QOS POOLS ############################################
     # a qos pool is actually a queue but these 2 are special
 
-    def get_qos_pool_by_id_manual(self, id):
+    def get_qos_pool_by_id(self, id):
         if self.qos_pools_by_id.get(id):
             return self.qos_pools_by_id[id]
         url = '/ws.v1/lqueue'
@@ -180,7 +180,7 @@ class NVP(object):
             return r[0]
         raise ResourceNotFound('QOS POOL |%s|' % id)
 
-    def get_qos_pool_by_name_manual(self, name):
+    def get_qos_pool_by_name(self, name):
         if self.qos_pools_by_name.get(name):
             return self.qos_pools_by_name[name]
         url = '/ws.v1/lqueue'
@@ -194,7 +194,7 @@ class NVP(object):
 
     #################### TRANSPORT ZONES ######################################
 
-    def get_transport_zone_by_id_manual(self, id):
+    def get_transport_zone_by_id(self, id):
         if self.transport_zones.get(id):
             return self.transport_zones[id]
         url = '/ws.v1/transport-zone'

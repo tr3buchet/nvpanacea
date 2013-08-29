@@ -70,27 +70,27 @@ class HunterKillerPortOps(HunterKiller):
     def is_public_switch(self, switch):
         if switch:
             zone_id = switch['transport_zone_uuid']
-            zone = self.nvp.get_transport_zone_by_id_manual(zone_id)
+            zone = self.nvp.get_transport_zone_by_id(zone_id)
             zone_name = zone['display_name']
             return zone_name == 'public'
 
     def is_snet_switch(self, switch):
         if switch:
             zone_id = switch['transport_zone_uuid']
-            zone = self.nvp.get_transport_zone_by_id_manual(zone_id)
+            zone = self.nvp.get_transport_zone_by_id(zone_id)
             zone_name = zone['display_name']
             return zone_name == 'private'
 
     def get_qos_pool_from_switch(self, switch):
         qos_pool_id = switch['tags'].get('qos_pool')
         if qos_pool_id:
-            return self.nvp.get_qos_pool_by_id_manual(qos_pool_id)
+            return self.nvp.get_qos_pool_by_id(qos_pool_id)
 
     def get_qos_pool_from_transport_zone_map(self, zone_id):
-        zone = self.nvp.get_transport_zone_by_id_manual(zone_id)
+        zone = self.nvp.get_transport_zone_by_id(zone_id)
         zone_name = zone['display_name']
         qos_pool_name = zone_qos_pool_map[zone_name]
-        return self.nvp.get_qos_pool_by_name_manual(qos_pool_name)
+        return self.nvp.get_qos_pool_by_name(qos_pool_name)
 
     def get_qos_pool(self, switch):
         qos_pool = self.get_qos_pool_from_switch(switch)
@@ -174,7 +174,7 @@ class OrphanPorts(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports_manual(relations)
+        nvp_ports = self.nvp.get_ports(relations)
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
@@ -246,7 +246,7 @@ class OrphanPorts(HunterKillerPortOps):
         print
         LOG.action('delete port |%s|' % port['uuid'])
         if self.action == 'fix':
-            self.nvp.delete_port_manual(port)
+            self.nvp.delete_port(port)
 
 
 class RepairQueues(HunterKillerPortOps):
@@ -262,7 +262,7 @@ class RepairQueues(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports_manual(relations)
+        nvp_ports = self.nvp.get_ports(relations)
         instances = self.nova.get_instances_hashed_by_id(join_flavor=True)
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
@@ -389,7 +389,7 @@ class RepairQueues(HunterKillerPortOps):
 
         LOG.action('creating queue: |%s|' % queue)
         if self.action == 'fix':
-            nvp_queue = self.nvp.create_queue_manual(**queue)
+            nvp_queue = self.nvp.create_queue(**queue)
             if nvp_queue:
                 return {'uuid': nvp_queue['uuid'],
                         'max_bandwidth_rate': nvp_queue['max_bandwidth_rate'],
@@ -405,7 +405,7 @@ class RepairQueues(HunterKillerPortOps):
         LOG.action('associating port |%s| with queue |%s|' %
                    (port['uuid'], queue['uuid']))
         if self.action == 'fix':
-            self.nvp.port_update_queue_manual(port, queue['uuid'])
+            self.nvp.port_update_queue(port, queue['uuid'])
             port['queue'] = queue
         else:
             # in fixnoop, we need to "associate" the queue for similar
@@ -418,7 +418,7 @@ class RepairQueues(HunterKillerPortOps):
                           max_bandwidth_rate))
 
         if self.action == 'fix':
-            self.nvp.update_queue_maxbw_rate_manual(queue, max_bandwidth_rate)
+            self.nvp.update_queue_maxbw_rate(queue, max_bandwidth_rate)
 
         # update queue data structure
         queue['max_bandwidth_rate'] = max_bandwidth_rate
@@ -432,7 +432,7 @@ class NoVMIDPorts(HunterKillerPortOps):
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        nvp_ports = self.nvp.get_ports_manual(relations)
+        nvp_ports = self.nvp.get_ports(relations)
         instances = self.nova.get_instances_hashed_by_id()
         interfaces = self.melange.get_interfaces_hashed_by_id()
 
@@ -490,7 +490,7 @@ class NoVMIDPorts(HunterKillerPortOps):
         port['tags']['vm_id'] = vmid
         port['vmid'] = vmid
         if self.action == 'fix':
-            self.nvp.port_update_tags_manual(port)
+            self.nvp.port_update_tags(port)
 
 
 class OrphanQueues(HunterKiller):
@@ -501,13 +501,13 @@ class OrphanQueues(HunterKiller):
         self.start_time = time.time()
 
         # get the full list of queues, excepting the qos pools
-        all_queues = [q['uuid'] for q in self.nvp.get_queues_manual()
+        all_queues = [q['uuid'] for q in self.nvp.get_queues()
                       if self.nvp.tags_to_dict(q).get('qos_pool') is None]
         self.queues_checked = len(all_queues)
 
         # get nvp_ports and port_hash manually
         port_relations = ('LogicalQueueConfig', )
-        nvp_ports = self.nvp.get_ports_manual(port_relations)
+        nvp_ports = self.nvp.get_ports(port_relations)
         port_hash = {}
         for port in nvp_ports:
             queue_uuid = port['_relations']['LogicalQueueConfig'].get('uuid')
@@ -547,10 +547,10 @@ class OrphanQueues(HunterKiller):
         if port_hash is not None:
             return port_hash[queue_uuid] if queue_uuid in port_hash else []
         port_relations = ('LogicalQueueConfig', )
-        return self.nvp.get_ports_manual(port_relations, queue_uuid=queue_uuid)
+        return self.nvp.get_ports(port_relations, queue_uuid=queue_uuid)
 
     def delete_queue(self, queue):
         print
         LOG.action('delete queue |%s|' % queue)
         if self.action == 'fix':
-            self.nvp.delete_queue_manual(queue)
+            self.nvp.delete_queue(queue)
