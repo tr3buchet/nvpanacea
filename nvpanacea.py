@@ -2,6 +2,7 @@
 #gevent.monkey.patch_all(dns=False)
 
 import argparse
+import functools
 import logging
 import utils
 import sys
@@ -47,16 +48,28 @@ def main():
                         default='fixnoop')
     parser.add_argument('-t', '--type', action='store',
                         help="orphan_ports, repair_queues, add_vmids, "
-                        "orphan_queues, orphan_interfaces, migrate_quark")
+                        "orphan_queues, orphan_interfaces, migrate_quark, "
+                        "kill_cell_queues, delete_queue_list")
+    parser.add_argument('-c', '--cell', action='store',
+                        help="required by kill_cell_queues")
     args = parser.parse_args()
     logging.basicConfig(level=getattr(logging, args.loglevel),
                         stream=sys.stdout)
+
+    if args.type == 'kill_cell_queues' and args.cell is None:
+        print 'ERROR: cell is required by kill_cell_queues:'
+        parser.print_help()
+        return
 
     hk_machine = {
         'orphan_ports': hunter_killer.OrphanPorts,
         'repair_queues': hunter_killer.RepairQueues,
         'no_vmids': hunter_killer.NoVMIDPorts,
         'orphan_queues': hunter_killer.OrphanQueues,
+        'kill_cell_queues': functools.partial(hunter_killer.KillCellQueues,
+                                              args.cell),
+        'delete_queue_list': functools.partial(hunter_killer.DeleteQueueList,
+                                               sys.stdin),
     }
 
     if args.type not in hk_machine:

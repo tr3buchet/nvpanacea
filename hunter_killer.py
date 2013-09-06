@@ -257,7 +257,7 @@ class RepairQueues(HunterKillerPortOps):
         2) associate a port to an existing queue
         3) update the max_bandwidth_rate on a port's queue
     """
-    def execute(self, **kwargs):
+    def execute(self):
         self.ports_checked = 0
         self.start_time = time.time()
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
@@ -418,7 +418,7 @@ class RepairQueues(HunterKillerPortOps):
                           max_bandwidth_rate))
 
         if self.action == 'fix':
-            self.nvp.update_queue_maxbw_rate(queue, max_bandwidth_rate)
+            self.nvp.update_queue_maxbw_rate(queue['uuid'], max_bandwidth_rate)
 
         # update queue data structure
         queue['max_bandwidth_rate'] = max_bandwidth_rate
@@ -497,15 +497,11 @@ class OrphanQueues(HunterKiller):
     """ compares the list of all queues with the list of queues found to be
         associated with ports. deletes queues which are not associated
     """
-    def execute(self, **kwargs):
+    def execute(self):
         self.start_time = time.time()
 
         # get the full list of queues, excepting the qos pools
         all_queues = self.nvp.get_queues()
-        for q in all_queues:
-            if 'qos_pool' in self.nvp.tags_to_dict(q):
-                print 'BAD!!!'
-        return
         self.queues_checked = len(all_queues)
 
         # get nvp_ports and port_hash manually
@@ -554,6 +550,93 @@ class OrphanQueues(HunterKiller):
 
     def delete_queue(self, queue):
         print
+        LOG.action('delete queue |%s|' % queue['uuid'])
+        if self.action == 'fix':
+            self.nvp.delete_queue(queue['uuid'])
+
+
+class KillCellQueues(HunterKiller):
+    """ uses mysql json to find the instances in a cell
+        removes the queues belonging to those instances
+    """
+    def __init__(self, cell, *args, **kwargs):
+        self.cell = cell
+        return super(KillCellQueues, self).__init__(*args, **kwargs)
+
+    def execute(self):
+        self.start_time = time.time()
+
+        all_queues = self.nvp.get_queues()
+        all_instances = self.nova.get_instances_hashed_by_id()
+
+        # get all this environment's datas
+        cells = {}
+        for uuid, instance in all_instances.iteritems():
+            if instance['cell_name'] in cells.keys():
+                cells[instance['cell_name']]['instances'].append(instance)
+            else:
+                cells[instance['cell_name']] = {'instances': [instance],
+                                                'queues': []}
+        for queue in all_queues:
+            LOG.info('checking queue |%s|' % queue['uuid'])
+            vmid = self.nvp.tags_to_dict(queue).get('vmid')
+            if not vmid:
+                LOG.error('queue |%s| does not have vmid' % queue['uuid'])
+            cell = all_instances.get(vmid, {}).get('cell_name')
+            cells[cell]['queues'].append(queue)
+
+        # print what we've managed to get (sanity check)
+        arrow = '<---'
+        msg = ('\nctrl-c in 10 seconds if the following doesn\'t look right\n'
+               'Found |%s| queues\n'
+               'Found |%s| instances\n'
+               'Found these cells (arrows deleting):')
+        print msg % (len(all_queues), len(all_instances))
+        for k, v in cells.iteritems():
+            a = arrow if (k == self.cell or k is None) else ''
+            msg = '%25s: %6d instances %6d queues %s'
+            print msg % (k, len(v['instances']), len(v['queues']), a)
+        time.sleep(10)
+        msg = ('Walking |%s| queues to remove for cell |%s|, '
+               'a \'.\' is a queue, '
+               'check out loglevel INFO if you want to watch.')
+        print msg % (cell, len(all_queues))
+
+        print ','.join([c['uuid'] for c in cells[None]['queues']])
+        # print results
+        print
+#        print 'queues deleted:', deleted_queues
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made(queues=len(all_queues))
+
+    def delete_queue(self, queue):
+        print
+        LOG.action('delete queue |%s|' % queue['uuid'])
+        if self.action == 'fix':
+            self.nvp.delete_queue(queue['uuid'])
+
+
+class DeleteQueueList(HunterKiller):
+    """ gets a csv of queue uuids from stdin
+        deletes them all
+    """
+    def __init__(self, file, *args, **kwargs):
+        self.queues = file.read().strip().split('\n')
+        return super(DeleteQueueList, self).__init__(*args, **kwargs)
+
+    def execute(self):
+        self.start_time = time.time()
+
+        print 'Found |%d| queues from input' % len(self.queues)
+        for queue in self.queues:
+            self.delete_queue(queue)
+
+        print
+        print 'queues deleted:', len(self.queues)
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made()
+
+    def delete_queue(self, queue):
         LOG.action('delete queue |%s|' % queue)
         if self.action == 'fix':
             self.nvp.delete_queue(queue)

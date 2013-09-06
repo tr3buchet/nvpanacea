@@ -159,13 +159,13 @@ class NVP(object):
         except ResourceNotFound:
             pass
 
-    def update_queue_maxbw_rate(self, queue, max_bandwidth_rate):
-        url = '/ws.v1/lqueue/%s' % queue['uuid']
+    def update_queue_maxbw_rate(self, id, max_bandwidth_rate):
+        url = '/ws.v1/lqueue/%s' % id
         data = {'max_bandwidth_rate': max_bandwidth_rate}
         try:
             self.url_request(url, 'put', data=json.dumps(data))
         except ResourceNotFound:
-            LOG.error('queue |%s| was not found to update!!' % queue['uuid'])
+            LOG.error('queue |%s| was not found to update!!' % id)
 
     #################### QOS POOLS ############################################
     # a qos pool is actually a queue but these 2 are special
@@ -264,7 +264,7 @@ class Nova(MysqlJsonBridgeEndpoint):
         self.calls = 0
 
     def get_instance_by_id(self, id, join_flavor=False):
-        select_list = ['uuid', 'vm_state', 'terminated_at']
+        select_list = ['uuid', 'vm_state', 'terminated_at', 'cell_name']
         if join_flavor:
             select_list.extend(['instance_type_id', 'rxtx_factor'])
             sql = ('select %s from instances left join instance_types '
@@ -276,7 +276,7 @@ class Nova(MysqlJsonBridgeEndpoint):
         return self.first_result(result)
 
     def get_instances(self, join_flavor=False):
-        select_list = ['uuid', 'vm_state', 'terminated_at']
+        select_list = ['uuid', 'vm_state', 'terminated_at', 'cell_name']
         if join_flavor:
             select_list.extend(['instance_type_id', 'rxtx_factor'])
             sql = ('select %s from instances left join instance_types '
