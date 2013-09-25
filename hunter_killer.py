@@ -2,6 +2,7 @@ import logging
 import sys
 import time
 from datetime import timedelta
+from gevent.pool import Pool
 
 import querylib
 
@@ -12,6 +13,8 @@ LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
+
+GEVENT_THREADS = 10
 
 
 class HunterKiller(object):
@@ -628,8 +631,10 @@ class DeleteQueueList(HunterKiller):
         self.start_time = time.time()
 
         print 'Found |%d| queues from input' % len(self.queues)
-        for queue in self.queues:
-            self.delete_queue(queue)
+        pool = Pool(GEVENT_THREADS)
+        pool.map(self.delete_queue, self.queues)
+#        for queue in self.queues:
+#            self.delete_queue(queue)
 
         print
         print 'queues deleted:', len(self.queues)
