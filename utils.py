@@ -51,6 +51,10 @@ def get_connection_creds(environment):
 
     # get melange mysqljsonbridge connection creds
     melange_url = resolve_url(config.get(environment, 'melange_bridge_url'))
+    melange_ip = config.get(environment, 'melange_ip')
+    melange_port = config.get(environment, 'melange_port')
+    melange_ip_user = config.get(environment, 'melange_ip_user')
+    melange_ip_pass = config.get(environment, 'melange_ip_pass')
     melange_user = check_keyring(config.get(environment, 'melange_user'))
     melange_pass = check_keyring(config.get(environment, 'melange_pass'))
     if not (melange_url and melange_user and melange_pass):
@@ -71,6 +75,10 @@ def get_connection_creds(environment):
             'nvp_username': nvp_user,
             'nvp_password': nvp_pass,
             'melange_url': melange_url['resolved_url'],
+            'melange_ip': melange_ip,
+            'melange_port': melange_port,
+            'melange_ip_user': melange_ip_user,
+            'melange_ip_pass': melange_ip_pass,
             'melange_username': melange_user,
             'melange_password': melange_pass,
             'nova_url': nova_url['resolved_url'],

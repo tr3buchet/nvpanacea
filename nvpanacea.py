@@ -70,6 +70,8 @@ def main():
                                               args.cell),
         'delete_queue_list': functools.partial(hunter_killer.DeleteQueueList,
                                                sys.stdin),
+        'vif_id_on_device': hunter_killer.VifIDOnDevice,
+        'remove_queue_ref': hunter_killer.RemoveQueueRef,
     }
 
     if args.type not in hk_machine:

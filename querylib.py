@@ -14,6 +14,10 @@ class ResourceNotFound(Exception):
     pass
 
 
+class MysqlJsonException(Exception):
+    pass
+
+
 class NVP(object):
     ALL_RELATIONS = ['LogicalPortStatus', 'LogicalPortAttachment',
                      'LogicalQueueConfig', 'LogicalSwitchConfig',
@@ -135,6 +139,16 @@ class NVP(object):
             LOG.error('port |%s| tags were not updated to |%s|' %
                       (port['uuid'], port['tags']))
 
+    def port_delete_queue_ref(self, port):
+        url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
+                                              port['uuid'])
+        data = {'queue_uuid': None}
+        try:
+            self.url_request(url, 'put', data=json.dumps(data))
+        except ResourceNotFound:
+            LOG.error('port |%s| tags were not updated to |%s|' %
+                      (port['uuid'], port['tags']))
+
     #################### QUEUES ############################################
 
     def get_queues(self):
@@ -216,7 +230,10 @@ class MysqlJsonBridgeEndpoint(object):
                               verify=False, auth=self.auth)
         self.calls += 1
         r.raise_for_status()
-        return r.json()
+        rval = r.json()
+        if 'ERROR' in rval:
+            raise MysqlJsonException(rval['ERROR'])
+        return rval
 
     def first_result(self, result):
         try:
@@ -237,6 +254,14 @@ class Melange(MysqlJsonBridgeEndpoint):
         result = self.run_query(sql % id)
         return self.first_result(result)
 
+    def get_interfaces_with_null_viod(self):
+        select_list = ['i.id', 'ipb.tenant_id', 'i.vif_id_on_device']
+        sql = ('select %s from interfaces as i '
+               'JOIN ip_addresses as ipa ON ipa.interface_id = i.id '
+               'JOIN ip_blocks as ipb ON ipb.id = ipa.ip_block_id '
+               'WHERE i.vif_id_on_device IS NULL')
+        return self.run_query(sql % ','.join(select_list))['result']
+
     def get_interfaces(self):
         select_list = ['interfaces.id', 'mac_addresses.address as mac',
                        'device_id',
@@ -254,6 +279,10 @@ class Melange(MysqlJsonBridgeEndpoint):
     def get_interfaces_hashed_by_device_id(self):
         return dict((interface['device_id'], interface)
                     for interface in self.get_interfaces())
+
+    def update_interface_viod(self, vif_uuid, port_uuid):
+        sql = 'update interfaces set vif_id_on_device="%s" where id="%s"'
+        return self.run_query(sql % (vif_uuid, port_uuid))
 
 
 class Nova(MysqlJsonBridgeEndpoint):

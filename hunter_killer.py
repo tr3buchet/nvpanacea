@@ -6,6 +6,8 @@ from gevent.pool import Pool
 
 import querylib
 
+import pymysql
+
 
 LOG = logging.getLogger(__name__)
 LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
@@ -21,7 +23,8 @@ class HunterKiller(object):
     def __init__(self, action,
                  nvp_url, nvp_username, nvp_password,
                  nova_url, nova_username, nova_password,
-                 melange_url, melange_username, melange_password):
+                 melange_url, melange_username, melange_password,
+                 *args, **kwargs):
         self.action = action
         self.nvp = querylib.NVP(nvp_url, nvp_username, nvp_password)
         self.nova = querylib.Nova(nova_url, nova_username, nova_password)
@@ -645,3 +648,108 @@ class DeleteQueueList(HunterKiller):
         LOG.action('delete queue |%s|' % queue)
         if self.action == 'fix':
             self.nvp.delete_queue(queue)
+
+
+class RemoveQueueRef(HunterKiller):
+    """sets queue uuid to NULL"""
+    def execute(self):
+        self.start_time = time.time()
+
+        nvp_ports = self.nvp.get_ports(relations=['LogicalPortStatus'])
+        print 'Found |%s| ports, a \'.\' is a port' % len(nvp_ports)
+        ports = []
+        for nvp_port in nvp_ports:
+            nvp_status = nvp_port['_relations'].get('LogicalPortStatus')
+            port = {'uuid': nvp_port['uuid'],
+                    'switch': {'uuid': nvp_status['lswitch']['uuid']}}
+            ports.append(port)
+
+        for port in ports:
+            self.delete_queue_ref(port)
+            sys.stdout.write('.')
+            sys.stdout.flush()
+
+        print
+        print 'ports fixed:', len(ports)
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made()
+
+    def delete_queue_ref(self, port):
+        LOG.action('delete queue ref for port |%s|' % port['uuid'])
+        if self.action == 'fix':
+            self.nvp.port_delete_queue_ref(port)
+
+
+class VifIDOnDevice(HunterKiller):
+    """ updates vif_id_on_device in the melange db
+        with port id from nvp
+    """
+    def __init__(self, melange_ip, melange_port,
+                 melange_ip_user, melange_ip_pass, *args, **kwargs):
+        self.mconn = pymysql.connect(host=melange_ip, port=int(melange_port),
+                                     user=melange_ip_user,
+                                     passwd=melange_ip_pass,
+                                     db='melange', autocommit=True)
+        return super(VifIDOnDevice, self).__init__(*args, **kwargs)
+
+    def execute(self):
+        self.start_time = time.time()
+
+        relations = ('LogicalPortAttachment')
+        nvp_ports = self.nvp.get_ports(relations)
+        nvp_ports = self.nvp_ports_by_attachment_id(nvp_ports)
+        print 'Found |%d| ports in NVP' % len(nvp_ports)
+
+        vifs = self.melange.get_interfaces_with_null_viod()
+        print 'Found |%d| interfaces with null viod' % len(vifs)
+        vifs = [vif for vif in vifs if self.is_isolated_vif(vif)]
+        print 'Found |%d| isolated interfaces with null viod' % len(vifs)
+
+        updated_vifs = 0
+        hozed_vifs = 0
+        for vif in vifs:
+            if vif['id'] in nvp_ports:
+                self.update_interface_viod(vif['id'], nvp_ports[vif['id']])
+                updated_vifs += 1
+            else:
+                LOG.action('attachment_id |%s| not found in nvp_ports, '
+                           'setting to "hozed"' % vif['id'])
+                self.update_interface_viod(vif['id'], 'hozed')
+                hozed_vifs += 1
+        print
+        print 'vifs updated', updated_vifs
+        print 'vifs hozed', hozed_vifs
+        self.time_taken = timedelta(seconds=(time.time() - self.start_time))
+        self.print_calls_made()
+
+    def is_isolated_vif(self, vif):
+        try:
+            int(vif['tenant_id'])
+            return True
+        except ValueError:
+            return False
+
+    def nvp_ports_by_attachment_id(self, nvp_ports):
+        r = {}
+        for p in nvp_ports:
+            try:
+                vif_uuid = p['_relations']['LogicalPortAttachment']['vif_uuid']
+                r[vif_uuid] = p['uuid']
+            except KeyError:
+                pass
+        return r
+
+    def update_interface_viod(self, vif_uuid, port_uuid):
+        LOG.action('set vif |%s| vif_id_on_device to |%s|' % (vif_uuid,
+                                                              port_uuid))
+        if self.action == 'fix':
+            cur = self.mconn.cursor()
+
+            sql = ('update interfaces set vif_id_on_device="%s" '
+                   'where id="%s"')
+            cur.execute(sql % (port_uuid, vif_uuid))
+            cur.execute(sql)
+            for row in cur:
+                print row
+
+            cur.close()
