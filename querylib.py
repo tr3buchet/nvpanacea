@@ -78,7 +78,7 @@ class NVP(object):
 
     def _request_with_retry(self, url, method='get', **kwargs):
         http_method = getattr(self.session, method)
-        while True:
+        for x in xrange(10):
             try:
                 LOG.info('making nvp call |%s - %s| |%s|' %
                          (method, url, kwargs))
@@ -95,6 +95,10 @@ class NVP(object):
                     LOG.error('HTTP exception |%s| |%s - %s| |%s|' %
                               (e, method, url, kwargs))
                     raise ResourceNotFound('not found |%s|' % url)
+                if e.response.status_code == 500:
+                    LOG.error('HTTP exception |%s| |%s - %s| |%s|' %
+                              (e, method, url, kwargs))
+                    raise Exception('server error |%s|' % url)
                 LOG.error('HTTP exception |%s| |%s - %s| |%s|, retrying' %
                           (e, method, url, kwargs))
                 time.sleep(.01)
@@ -145,9 +149,8 @@ class NVP(object):
         data = {'queue_uuid': None}
         try:
             self.url_request(url, 'put', data=json.dumps(data))
-        except ResourceNotFound:
-            LOG.error('port |%s| tags were not updated to |%s|' %
-                      (port['uuid'], port['tags']))
+        except:
+            LOG.error('port |%s| failed' % port['uuid'])
 
     #################### QUEUES ############################################
 
