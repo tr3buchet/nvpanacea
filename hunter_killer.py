@@ -664,10 +664,8 @@ class RemoveQueueRef(HunterKiller):
                     'switch': {'uuid': nvp_status['lswitch']['uuid']}}
             ports.append(port)
 
-        for port in ports:
-            self.delete_queue_ref(port)
-            sys.stdout.write('.')
-            sys.stdout.flush()
+        pool = Pool(5)
+        pool.map(self.delete_queue_ref, ports)
 
         print
         print 'ports fixed:', len(ports)
@@ -677,6 +675,8 @@ class RemoveQueueRef(HunterKiller):
     def delete_queue_ref(self, port):
         LOG.action('delete queue ref for port |%s|' % port['uuid'])
         if self.action == 'fix':
+            sys.stdout.write('.')
+            sys.stdout.flush()
             self.nvp.port_delete_queue_ref(port)
 
 
