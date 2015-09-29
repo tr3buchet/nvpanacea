@@ -30,7 +30,8 @@ class NVP(object):
         # specifically for self.url_request()
         self.session = requests.session()
         self.url = url
-        self.auth = HTTPBasicAuth(username, password)
+#        self.auth = HTTPBasicAuth(username, password)
+        self.cookie = self.login(url, username, password)
 
         self.calls = 0
 
@@ -38,6 +39,14 @@ class NVP(object):
         self.qos_pools_by_id = {}
         self.qos_pools_by_name = {}
         self.transport_zones = {}
+
+    def login(self, url, username, password, timeout=30):
+        URL = url + '/ws.v1/login'
+        data = {'username': username, 'password': password}
+        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        r = requests.post(URL, data=data, headers=headers, verify=False,
+                          timeout=timeout)
+        return r.headers['set-cookie']
 
     @staticmethod
     def tags_to_dict(obj):
@@ -83,7 +92,8 @@ class NVP(object):
                 LOG.info('making nvp call |%s - %s| |%s|' %
                          (method, url, kwargs))
                 self.calls += 1
-                r = http_method(url, verify=False, auth=self.auth,
+                r = http_method(url, headers={'cookie': self.cookie},
+                                verify=False,
                                 timeout=30, **kwargs)
                 r.raise_for_status()
                 return r
