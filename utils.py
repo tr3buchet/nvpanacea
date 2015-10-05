@@ -71,6 +71,15 @@ def get_connection_creds(environment):
     print 'nova mysqljson bridge: %s (%s)' % (nova_url['url'],
                                               nova_url['address'])
 
+    # get ineutron mysqljsonbridge connection creds
+    neutron_url = resolve_url(config.get(environment, 'neutron_bridge_url'))
+    neutron_user = check_keyring(config.get(environment, 'neutron_user'))
+    neutron_pass = check_keyring(config.get(environment, 'neutron_pass'))
+    if not (neutron_url and neutron_user and neutron_pass):
+        raise Exception(msg % 'neutron')
+    print 'neutron mysqljson bridge: %s (%s)' % (neutron_url['url'],
+                                                 neutron_url['address'])
+
     return {'nvp_url': nvp_url['resolved_url'],
             'nvp_username': nvp_user,
             'nvp_password': nvp_pass,
@@ -81,6 +90,9 @@ def get_connection_creds(environment):
             'melange_ip_pass': melange_ip_pass,
             'melange_username': melange_user,
             'melange_password': melange_pass,
+            'neutron_url': neutron_url['resolved_url'],
+            'neutron_username': neutron_user,
+            'neutron_password': neutron_pass,
             'nova_url': nova_url['resolved_url'],
             'nova_username': nova_user,
             'nova_password': nova_pass}

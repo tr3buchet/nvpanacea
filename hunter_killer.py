@@ -2,7 +2,7 @@ import logging
 import sys
 import time
 from datetime import timedelta
-from gevent.pool import Pool
+#from gevent.pool import Pool
 
 import querylib
 
@@ -24,12 +24,15 @@ class HunterKiller(object):
                  nvp_url, nvp_username, nvp_password,
                  nova_url, nova_username, nova_password,
                  melange_url, melange_username, melange_password,
+                 neutron_url, neutron_username, neutron_password,
                  *args, **kwargs):
         self.action = action
         self.nvp = querylib.NVP(nvp_url, nvp_username, nvp_password)
         self.nova = querylib.Nova(nova_url, nova_username, nova_password)
         self.melange = querylib.Melange(melange_url, melange_username,
                                         melange_password)
+        self.neutron = querylib.Neutron(neutron_url, neutron_username,
+                                        neutron_password)
 
     def execute(self, *args, **kwargs):
         raise NotImplementedError()
@@ -182,24 +185,24 @@ class OrphanPorts(HunterKillerPortOps):
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
         nvp_ports = self.nvp.get_ports(relations)
         instances = self.nova.get_instances_hashed_by_id()
-        interfaces = self.melange.get_interfaces_hashed_by_id()
+        neutron_ports = self.neutron.get_ports_hashed_by_id()
 
         # print what we've managed to get (sanity check)
-        msg = ('Found |%s| ports\n'
+        msg = ('Found |%s| nvp_ports\n'
                'Found |%s| intances\n'
-               'Found |%s| interfaces\n'
+               'Found |%s| neutron_ports\n'
                'ctrl-c in 10 seconds if this doesn\'t look right')
-        print msg % (len(nvp_ports), len(instances), len(interfaces))
+        print msg % (len(nvp_ports), len(instances), len(neutron_ports))
         time.sleep(10)
         msg = ('Walking |%s| ports to find orphans, '
                'check out loglevel INFO if you want to watch. a . is a port')
         print msg % len(nvp_ports)
 
-        self.walk_port_list(nvp_ports, instances, interfaces)
+        self.walk_port_list(nvp_ports, instances, neutron_ports)
         self.time_taken = timedelta(seconds=(time.time() - self.start_time))
         self.print_calls_made(ports=self.ports_checked)
 
-    def walk_port_list(self, nvp_ports, instances, interfaces):
+    def walk_port_list(self, nvp_ports, instances, neutron_ports):
         # walk port list populating port to get the instance
         # if any error is raised getting instance, ignore the port
         # if port is deemed orphan, fix it
@@ -213,21 +216,30 @@ class OrphanPorts(HunterKillerPortOps):
 
             if not (port['link_status_up'] or port['fabric_status_up']):
                 try:
-                    port['instance'] = self.get_instance_by_port(port,
-                                                                 instances,
-                                                                 interfaces)
-                    if port['instance'].get('vm_state') in down_down:
-                        down_down[port['instance'].get('vm_state')] += 1
-                    else:
-                        down_down[port['instance'].get('vm_state')] = 1
+                    if port['vif_uuid'] not in neutron_ports:
+                        self.delete_port(port)
+                        orphans_fixed += 1
                 except Exception as e:
                     print
                     LOG.error(e)
                     continue
-
-                if self.is_orphan_port(port):
-                    self.delete_port(port)
-                    orphans_fixed += 1
+#            if not (port['link_status_up'] or port['fabric_status_up']):
+#                try:
+#                    port['instance'] = self.get_instance_by_port(port,
+#                                                                 instances,
+#                                                                neutron_ports)
+#                    if port['instance'].get('vm_state') in down_down:
+#                        down_down[port['instance'].get('vm_state')] += 1
+#                    else:
+#                        down_down[port['instance'].get('vm_state')] = 1
+#                except Exception as e:
+#                    print
+#                    LOG.error(e)
+#                    continue
+#
+#                if self.is_orphan_port(port):
+#                    self.delete_port(port)
+#                    orphans_fixed += 1
 
         print '\norphans fixed:', orphans_fixed
         print '\ndown_down instance status counts:', down_down
@@ -634,10 +646,10 @@ class DeleteQueueList(HunterKiller):
         self.start_time = time.time()
 
         print 'Found |%d| queues from input' % len(self.queues)
-        pool = Pool(GEVENT_THREADS)
-        pool.map(self.delete_queue, self.queues)
-#        for queue in self.queues:
-#            self.delete_queue(queue)
+#        pool = Pool(GEVENT_THREADS)
+#        pool.map(self.delete_queue, self.queues)
+        for queue in self.queues:
+            self.delete_queue(queue)
 
         print
         print 'queues deleted:', len(self.queues)
@@ -664,8 +676,9 @@ class RemoveQueueRef(HunterKiller):
                     'switch': {'uuid': nvp_status['lswitch']['uuid']}}
             ports.append(port)
 
-        pool = Pool(5)
-        pool.map(self.delete_queue_ref, ports)
+        raise Exception('need gevent pool to run RemoveQueueRef')
+        # pool = Pool(5)
+        # pool.map(self.delete_queue_ref, ports)
 
         print
         print 'ports fixed:', len(ports)

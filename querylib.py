@@ -4,6 +4,8 @@ import time
 
 import requests
 from requests.auth import HTTPBasicAuth
+from requests.packages import urllib3
+urllib3.disable_warnings()
 
 
 LOG = logging.getLogger(__name__)
@@ -296,6 +298,33 @@ class Melange(MysqlJsonBridgeEndpoint):
     def update_interface_viod(self, vif_uuid, port_uuid):
         sql = 'update interfaces set vif_id_on_device="%s" where id="%s"'
         return self.run_query(sql % (vif_uuid, port_uuid))
+
+
+class Neutron(MysqlJsonBridgeEndpoint):
+    def __init__(self, url, username, password):
+        self.url = url
+        self.auth = HTTPBasicAuth(username, password)
+        self.session = requests.session()
+        self.calls = 0
+
+    def get_ports(self):
+        select_list = ('qp.id', 'qp.mac_address', 'qp.device_id',
+                       'group_concat(qip.address_readable) as ips')
+        sql = ('select %s from quark_ports as qp '
+               'left join quark_port_ip_address_associations as assoc '
+               'on qp.id = assoc.port_id '
+               'left join quark_ip_addresses as qip '
+               'on assoc.ip_address_id = qip.id '
+               'group by qp.id')
+        return self.run_query(sql % ','.join(select_list))['result']
+
+    def get_ports_hashed_by_id(self):
+        return dict((port['id'], port)
+                    for port in self.get_ports())
+
+    def get_ports_hashed_by_device_id(self):
+        return dict((port['device_id'], port)
+                    for port in self.get_ports())
 
 
 class Nova(MysqlJsonBridgeEndpoint):

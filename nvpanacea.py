@@ -1,5 +1,5 @@
-import gevent.monkey
-gevent.monkey.patch_all(dns=False)
+#import gevent.monkey
+#gevent.monkey.patch_all(dns=False)
 
 import argparse
 import functools
