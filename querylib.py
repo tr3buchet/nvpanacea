@@ -9,7 +9,6 @@ urllib3.disable_warnings()
 
 
 LOG = logging.getLogger(__name__)
-LOG.action = lambda s, *args, **kwargs: LOG.log(33, s, *args, **kwargs)
 
 
 class ResourceNotFound(Exception):
@@ -60,7 +59,7 @@ class NVP(object):
         """targs up some tags from a dict"""
         return [{'scope': k, 'tag': v} for k, v in the_d.iteritems()]
 
-    def url_request(self, url, method='get', **kwargs):
+    def url_request(self, url, method='get', follow_cursor=True, **kwargs):
         """make a manual request of NVP, will unroll pages if they exist"""
         url = self.url + url
         results = []
@@ -77,7 +76,7 @@ class NVP(object):
             results.append(output)
 
         # if we got a page_cursor, handle it
-        while 'page_cursor' in output:
+        while follow_cursor and 'page_cursor' in output:
             if 'params' in kwargs:
                 kwargs['params']['_page_cursor'] = output['page_cursor']
             else:
@@ -125,8 +124,8 @@ class NVP(object):
         except ResourceNotFound:
             pass
 
-    def get_ports(self, relations=None, queue_uuid=None):
-        url = '/ws.v1/lswitch/*/lport'
+    def get_ports(self, relations=None, queue_uuid=None, switch_uuid=None):
+        url = '/ws.v1/lswitch/%s/lport' % (switch_uuid or '*')
         params = {'fields': '*',
                   '_page_length': 1000}
         if relations:
@@ -134,6 +133,7 @@ class NVP(object):
         if queue_uuid:
             params['queue_uuid'] = queue_uuid
         return self.url_request(url, 'get', params=params)
+                                #follow_cursor=False)
 
     def port_update_queue(self, port, queue_id):
         url = '/ws.v1/lswitch/%s/lport/%s' % (port['switch']['uuid'],
@@ -239,22 +239,44 @@ class NVP(object):
 
 
 class MysqlJsonBridgeEndpoint(object):
-    def run_query(self, sql):
+    def run_query(self, sql, hash_by=None):
         data = {'sql': sql}
+        LOG.info('|%s|: running sql query |%s|' % (self.url, sql))
         r = self.session.post(self.url, data=data,
                               verify=False, auth=self.auth)
         self.calls += 1
         r.raise_for_status()
         rval = r.json()
         if 'ERROR' in rval:
+            LOG.error('|%s|: error running query |%s|' % (self.url,
+                                                          rval['ERROR']))
             raise MysqlJsonException(rval['ERROR'])
-        return rval
+        if hash_by is None:
+            return rval['result']
+        else:
+            return self.hash_by(rval['result'], hash_by)
 
-    def first_result(self, result):
+    def first_result(self, results):
         try:
-            return result['result'][0]
+            return results[0]
         except (TypeError, IndexError, KeyError):
             return None
+
+    @staticmethod
+    def hash_by(results, k):
+        return {row[k]: row for row in results}
+
+    def get_table(self, table, hash_by=None):
+        return self.run_query('select * from %s' % table, hash_by)
+
+    def show_tables(self):
+        return self.run_query('show tables')
+
+    def describe_table(self, table, short=True):
+        r = self.run_query('describe %s' % table)
+        if short:
+            return tuple(item['Field'] for item in r)
+        return r
 
 
 class Melange(MysqlJsonBridgeEndpoint):
@@ -275,7 +297,7 @@ class Melange(MysqlJsonBridgeEndpoint):
                'JOIN ip_addresses as ipa ON ipa.interface_id = i.id '
                'JOIN ip_blocks as ipb ON ipb.id = ipa.ip_block_id '
                'WHERE i.vif_id_on_device IS NULL')
-        return self.run_query(sql % ','.join(select_list))['result']
+        return self.run_query(sql % ','.join(select_list))
 
     def get_interfaces(self):
         select_list = ['interfaces.id', 'mac_addresses.address as mac',
@@ -285,7 +307,7 @@ class Melange(MysqlJsonBridgeEndpoint):
                'on interfaces.id=mac_addresses.interface_id left join '
                'ip_addresses on interfaces.id=ip_addresses.interface_id '
                'group by interfaces.id')
-        return self.run_query(sql % ','.join(select_list))['result']
+        return self.run_query(sql % ','.join(select_list))
 
     def get_interfaces_hashed_by_id(self):
         return dict((interface['id'], interface)
@@ -307,24 +329,43 @@ class Neutron(MysqlJsonBridgeEndpoint):
         self.session = requests.session()
         self.calls = 0
 
-    def get_ports(self):
-        select_list = ('qp.id', 'qp.mac_address', 'qp.device_id',
-                       'group_concat(qip.address_readable) as ips')
-        sql = ('select %s from quark_ports as qp '
-               'left join quark_port_ip_address_associations as assoc '
-               'on qp.id = assoc.port_id '
-               'left join quark_ip_addresses as qip '
-               'on assoc.ip_address_id = qip.id '
-               'group by qp.id')
-        return self.run_query(sql % ','.join(select_list))['result']
+    def get_ports(self, hash_by='id'):
+        return self.get_table('quark_ports', hash_by)
 
-    def get_ports_hashed_by_id(self):
-        return dict((port['id'], port)
-                    for port in self.get_ports())
+    def get_sg_assoc(self, hash_by='port_id'):
+        r = self.get_table('quark_port_security_group_associations')
+        if hash_by is None:
+            return r
+        else:
+            d = {}
+            for assoc in r:
+                if assoc[hash_by] in d:
+                    d[assoc[hash_by]].append(assoc)
+                else:
+                    d[assoc[hash_by]] = []
+            return d
 
-    def get_ports_hashed_by_device_id(self):
-        return dict((port['device_id'], port)
-                    for port in self.get_ports())
+    def get_sg(self, hash_by='id'):
+        return self.get_table('quark_security_groups', hash_by)
+
+    def get_ip_assoc(self, hash_by='port_id'):
+        r = self.get_table('quark_port_ip_address_associations')
+        if hash_by is None:
+            return r
+        else:
+            d = {}
+            for assoc in r:
+                if assoc[hash_by] in d:
+                    d[assoc[hash_by]].append(assoc)
+                else:
+                    d[assoc[hash_by]] = []
+            return d
+
+    def get_ip_addresses(self, hash_by='id'):
+        return self.get_table('quark_ip_addresses', hash_by)
+
+    def get_subnets(self, hash_by='id'):
+        return self.get_table('quark_subnets', hash_by)
 
 
 class Nova(MysqlJsonBridgeEndpoint):
@@ -355,7 +396,7 @@ class Nova(MysqlJsonBridgeEndpoint):
                    'where instances.deleted=0')
         else:
             sql = 'select %s from instances where deleted=0'
-        return self.run_query(sql % ','.join(select_list))['result']
+        return self.run_query(sql % ','.join(select_list))
 
     def get_instances_hashed_by_id(self, join_flavor=False):
         return dict((instance['uuid'], instance)
