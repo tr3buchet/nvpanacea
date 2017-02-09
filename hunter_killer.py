@@ -4,7 +4,9 @@ import time
 from datetime import timedelta
 import utils
 from pprint import pprint
-#from gevent.pool import Pool
+import json
+import netaddr
+# from gevent.pool import Pool
 
 import querylib
 
@@ -19,7 +21,7 @@ LOG.output = lambda s, *args, **kwargs: LOG.log(35, s, *args, **kwargs)
 zone_qos_pool_map = {'public': 'pub_base_rate',
                      'private': 'snet_base_rate'}
 
-#GEVENT_THREADS = 10
+# GEVENT_THREADS = 10
 
 
 class Summary(object):
@@ -50,6 +52,7 @@ class Summary(object):
         self.ports_public = 0
         self.ports_snet = 0
         self.ports_isolated = 0
+        self.ports_orphaned = 0
 
     def start_timer(self):
         self.timer = True
@@ -125,9 +128,14 @@ class Summary(object):
 
         if self.port_types:
             s += '  port type counts:\n'
+            s += '    total ports: %d\n' % (self.ports_public +
+                                            self.ports_snet +
+                                            self.ports_isolated +
+                                            self.ports_orphaned)
             s += '    public ports: %d\n' % self.ports_public
             s += '    snet ports: %d\n' % self.ports_snet
             s += '    isolated ports: %d\n' % self.ports_isolated
+            s += '    orphaned ports: %d\n' % self.ports_orphaned
         return s
 
 
@@ -148,6 +156,10 @@ class HunterKiller(object):
         self.summary = Summary()
 
     def execute(self, *args, **kwargs):
+        self.process()
+        self.display_summary()
+
+    def process(self, *args, **kwargs):
         raise NotImplementedError()
 
     def print_calls_made(self, ports=None, queues=None):
@@ -177,17 +189,17 @@ class HunterKillerPortOps(HunterKiller):
 
         # NOTE(tr3buchet): from when ports had queues
         # vmid tag wasn't on port, check the queue
-        #if not instance_id:
-        #    instance_id = port['queue'].get('vmid')
+        # if not instance_id:
+        #     instance_id = port['queue'].get('vmid')
 
         # NOTE(tr3buchet): from when we used melange
         # get instance_id from melange interfaces if we don't already have it
-        #if not instance_id:
-        #    interface = interfaces.get(port['vif_uuid']) \
-        #        if port['vif_uuid'] else None
-        #    # if we found an interface, grab it's device_id
-        #    if interface:
-        #        instance_id = interface['device_id']
+        # if not instance_id:
+        #     interface = interfaces.get(port['vif_uuid']) \
+        #         if port['vif_uuid'] else None
+        #     # if we found an interface, grab it's device_id
+        #     if interface:
+        #         instance_id = interface['device_id']
 
         # if we ended up with an instance_id, see if we have an instance
         # and return it
@@ -197,12 +209,12 @@ class HunterKillerPortOps(HunterKiller):
 
     def get_neutron_port(self, port, neutron_ports):
         # NOTE(tr3buchet): only works after nvp port has been port dicted
-#        return neutron_ports.get(port['vif_uuid'], {})
+        # return neutron_ports.get(port['vif_uuid'], {})
         return neutron_ports.get(port['neutron_port_uuid'], {})
 
     def is_isolated_switch(self, switch):
         # if switch  has a qos pool, it is not isolated
-        return not 'qos_pool' in switch['tags']
+        return 'qos_pool' not in switch['tags']
 
     def is_public_switch(self, switch):
         if switch:
@@ -322,10 +334,10 @@ class OrphanPorts(HunterKillerPortOps):
         self.ports_checked = 0
         relations = ('LogicalPortStatus', 'LogicalQueueConfig',
                      'LogicalPortAttachment', 'LogicalSwitchConfig')
-        #switch_uuid = '408b3d00-fe9d-4b04-8182-516c9dcbc33b'
+        # switch_uuid = '408b3d00-fe9d-4b04-8182-516c9dcbc33b'
         nvp_ports = self.nvp.get_ports(relations)
-        #nvp_ports = self.nvp.get_ports(relations, switch_uuid=switch_uuid)
-        instances = self.nova.get_instances_hashed_by_id()
+        # nvp_ports = self.nvp.get_ports(relations, switch_uuid=switch_uuid)
+        instances = self.nova.get_instances()
         neutron_ports = self.neutron.get_ports(hash_by='id')
 
         # print what we've managed to get (sanity check)
@@ -385,7 +397,7 @@ class OrphanPorts(HunterKillerPortOps):
             self.nvp.delete_port(port)
 
 
-#class RepairQueues(HunterKillerPortOps):
+# class RepairQueues(HunterKillerPortOps):
 #    """ creates a tree port/queue information and repairs queues.
 #
 #        can do one of these things:
@@ -399,7 +411,7 @@ class OrphanPorts(HunterKillerPortOps):
 #        relations = ('LogicalPortStatus', 'LogicalQueueConfig',
 #                     'LogicalPortAttachment', 'LogicalSwitchConfig')
 #        nvp_ports = self.nvp.get_ports(relations)
-#        instances = self.nova.get_instances_hashed_by_id(join_flavor=True)
+#        instances = self.nova.get_instances(join_flavor=True)
 #        interfaces = self.melange.get_interfaces_hashed_by_id()
 #
 #        # print what we've managed to get (sanity check)
@@ -564,7 +576,7 @@ class OrphanPorts(HunterKillerPortOps):
 #        return queue
 
 
-#class NoVMIDPorts(HunterKillerPortOps):
+# class NoVMIDPorts(HunterKillerPortOps):
 #    """ adds the vm_id tag to ports which do not have it """
 #    def execute(self):
 #        self.ports_checked = 0
@@ -572,7 +584,7 @@ class OrphanPorts(HunterKillerPortOps):
 #        relations = ('LogicalPortStatus', 'LogicalQueueConfig',
 #                     'LogicalPortAttachment', 'LogicalSwitchConfig')
 #        nvp_ports = self.nvp.get_ports(relations)
-#        instances = self.nova.get_instances_hashed_by_id()
+#        instances = self.nova.get_instances()
 #        interfaces = self.melange.get_interfaces_hashed_by_id()
 #
 #        # print what we've managed to get (sanity check)
@@ -708,7 +720,7 @@ class KillCellQueues(HunterKiller):
         self.start_time = time.time()
 
         all_queues = self.nvp.get_queues()
-        all_instances = self.nova.get_instances_hashed_by_id()
+        all_instances = self.nova.get_instances()
 
         # get all this environment's datas
         cells = {}
@@ -895,7 +907,7 @@ class SGPorts(HunterKiller):
         super(SGPorts, self).__init__(*args, **kwargs)
         self.summary.start_timer()
 
-    def execute(self):
+    def process(self):
         self.ports_checked = 0
         neutron_ports = self.neutron.get_ports()
         assoc = self.neutron.get_sg_assoc()
@@ -946,7 +958,10 @@ class IPInfo(HunterKiller):
         self.assocs = self.neutron.get_ip_assoc()
         self.ips = self.neutron.get_ip_addresses()
         self.subnets = self.neutron.get_subnets()
-        self.instances = self.nova.get_instances_hashed_by_id()
+        self.instances = self.nova.get_instances()
+
+    def display_summary(self):
+        pass
 
     def add_tenant(self, tenant_id):
         if tenant_id not in self.data:
@@ -973,13 +988,95 @@ class IPInfo(HunterKiller):
 
         return zip(port_ips, port_cidrs)
 
-    def execute(self):
+    def summarize_data(self):
+        public_only = []
+        iso_only = []
+        snet_only = []
+        pub_iso = []
+        pub_snet = []
+        snet_iso = []
+        triple_threat = []
+        none = []
+        total = 0
+
+        tenants_easy_iso = []
+        tenants_iso_fit16 = []
+        tenants_iso_nofit16 = []
+
+        for tenant, instances in self.data.iteritems():
+            isolated_ips = []
+            public_ips = []
+            snet_ips = []
+
+            for instance_uuid, ip_info in instances.iteritems():
+                total += 1
+                isolated_ips.extend([x for x, y in ip_info['isolated']
+                                     if ':' not in x])
+                public_ips.extend([x for x, y in ip_info['public']])
+                snet_ips.extend([x for x, y in ip_info['snet']])
+
+                if (ip_info['public'] and not ip_info['isolated'] and
+                   not ip_info['snet']):
+                    public_only.append(instance_uuid)
+                elif (ip_info['snet'] and not ip_info['isolated'] and
+                      not ip_info['public']):
+                    snet_only.append(instance_uuid)
+                elif (ip_info['isolated'] and not ip_info['snet'] and
+                      not ip_info['public']):
+                    iso_only.append(instance_uuid)
+                elif (ip_info['public'] and ip_info['isolated'] and
+                      not ip_info['snet']):
+                    pub_iso.append(instance_uuid)
+                elif (not ip_info['public'] and ip_info['isolated'] and
+                      ip_info['snet']):
+                    snet_iso.append(instance_uuid)
+                elif (ip_info['public'] and not ip_info['isolated'] and
+                      ip_info['snet']):
+                    pub_snet.append(instance_uuid)
+                elif (ip_info['public'] and ip_info['isolated'] and
+                      ip_info['snet']):
+                    triple_threat.append(instance_uuid)
+                elif (not ip_info['isolated'] and not ip_info['snet'] and
+                      not ip_info['public']):
+                    none.append(instance_uuid)
+            if len(isolated_ips) < 2:
+                tenants_easy_iso.append(tenant)
+            elif netaddr.spanning_cidr(isolated_ips).prefixlen >= 16:
+                tenants_iso_fit16.append(tenant)
+            else:
+                tenants_iso_nofit16.append(tenant)
+        print 'total instances: %d' % total
+        print 'isolated only instances: %d' % len(iso_only)
+        print 'public only instances: %d' % len(public_only)
+        print 'snet only instances: %d' % len(snet_only)
+
+        print 'public and snet no iso instances: %d' % len(pub_snet)
+        print 'public and iso no snet instances: %d' % len(pub_iso)
+        print 'snet and iso no public instances: %d' % len(snet_iso)
+
+        print 'pub snet and iso instances: %d' % len(triple_threat)
+        print 'no port instances: %d' % len(none)
+
+        print '\ntotal tenants: %d' % len(self.data)
+        print 'tenants with 1 or less iso IPs: %d' % len(tenants_easy_iso)
+        print 'tenants whose iso fit in /16: %d' % len(tenants_iso_fit16)
+        print 'tenants whose iso no fit in /16: %d' % len(tenants_iso_nofit16)
+
+    def process(self):
+        self.generate_dataset()
+
+        pprint(self.data)
+        self.print_calls_made(ports=self.ports_checked)
+        self.summarize_data()
+        with open('/home/trey/jsonified_iad', 'w') as f:
+            f.write(json.dumps(self.data))
+
+    def generate_dataset(self):
         self.ports_checked = 0
-        orphans = 0
-        #pprint(self.neutron.show_tables())
-        #print self.neutron.describe_table('quark_subnets')
-        #print self.neutron.describe_table('quark_ip_addresses')
-        #return
+        # pprint(self.neutron.show_tables())
+        # print self.neutron.describe_table('quark_subnets')
+        # print self.neutron.describe_table('quark_ip_addresses')
+        # return
 
         # print what we've managed to get (sanity check)
         msg = ('Found\n'
@@ -995,7 +1092,7 @@ class IPInfo(HunterKiller):
             instance_id = port['device_id']
             if instance_id not in self.instances:
                 # skip orphan port
-                orphans += 1
+                self.summary.ports_orphaned += 1
                 continue
             tenant_id = port['project_id']
             self.add_tenant_instance(tenant_id, instance_id)
@@ -1010,6 +1107,3 @@ class IPInfo(HunterKiller):
             else:
                 self.data[tenant_id][instance_id]['isolated'].extend(port_ips)
                 self.summary.ports_isolated += 1
-
-        pprint(self.data)
-        self.print_calls_made(ports=self.ports_checked)

@@ -266,6 +266,16 @@ class MysqlJsonBridgeEndpoint(object):
     def hash_by(results, k):
         return {row[k]: row for row in results}
 
+    @staticmethod
+    def hash_multiple_by(results, k):
+        hashed  = {}
+        for row in results:
+            if row[k] not in hashed:
+                hashed[row[k]] = [row]
+            else:
+                hashed[row[k]].append(row)
+        return hashed
+
     def get_table(self, table, hash_by=None):
         return self.run_query('select * from %s' % table, hash_by)
 
@@ -330,7 +340,8 @@ class Neutron(MysqlJsonBridgeEndpoint):
         self.calls = 0
 
     def get_ports(self, hash_by='id'):
-        return self.get_table('quark_ports', hash_by)
+        return self.hash_multiple_by(self.get_table('quark_ports'),
+                                     'device_id')
 
     def get_sg_assoc(self, hash_by='port_id'):
         r = self.get_table('quark_port_security_group_associations')
@@ -342,7 +353,7 @@ class Neutron(MysqlJsonBridgeEndpoint):
                 if assoc[hash_by] in d:
                     d[assoc[hash_by]].append(assoc)
                 else:
-                    d[assoc[hash_by]] = []
+                    d[assoc[hash_by]] = [assoc]
             return d
 
     def get_sg(self, hash_by='id'):
@@ -358,7 +369,7 @@ class Neutron(MysqlJsonBridgeEndpoint):
                 if assoc[hash_by] in d:
                     d[assoc[hash_by]].append(assoc)
                 else:
-                    d[assoc[hash_by]] = []
+                    d[assoc[hash_by]] = [assoc]
             return d
 
     def get_ip_addresses(self, hash_by='id'):
@@ -387,7 +398,7 @@ class Nova(MysqlJsonBridgeEndpoint):
         result = self.run_query(sql % (','.join(select_list), id))
         return self.first_result(result)
 
-    def get_instances(self, join_flavor=False):
+    def get_instances(self, hash_by='uuid', join_flavor=False):
         select_list = ['uuid', 'vm_state', 'terminated_at', 'cell_name']
         if join_flavor:
             select_list.extend(['instance_type_id', 'rxtx_factor'])
@@ -396,8 +407,13 @@ class Nova(MysqlJsonBridgeEndpoint):
                    'where instances.deleted=0')
         else:
             sql = 'select %s from instances where deleted=0'
-        return self.run_query(sql % ','.join(select_list))
+        return self.run_query(sql % ','.join(select_list), hash_by)
 
-    def get_instances_hashed_by_id(self, join_flavor=False):
-        return dict((instance['uuid'], instance)
-                    for instance in self.get_instances(join_flavor))
+    def get_instance_info_caches(self):
+        sql = ('select instance_uuid,network_info from instance_info_caches '
+               'where deleted=false')
+
+        blobs = self.run_query(sql)
+        return {blob['instance_uuid']: json.loads(blob['network_info'])
+                for blob in blobs}
+
